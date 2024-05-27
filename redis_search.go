@@ -839,6 +839,15 @@ func (r *RedisSearch) ForceReindex(index string) {
 	r.engine.GetEventBroker().Publish(RedisSearchIndexerChannelName, event)
 }
 
+func (r *RedisSearch) ForceReindexWithoutDrop(index string) {
+	_, has := r.engine.registry.redisSearchIndexes[r.redis.config.GetCode()][index]
+	if !has {
+		panic(errors.Errorf("unknown index %s in pool %s", index, r.redis.config.GetCode()))
+	}
+	event := redisIndexerEvent{Index: index}
+	r.engine.GetEventBroker().Publish(RedisSearchIndexerChannelName, event)
+}
+
 func (r *RedisSearch) SearchRaw(index string, query *RedisSearchQuery, pager *Pager) (total uint64, rows []interface{}) {
 	return r.search(index, query, pager, false)
 }
