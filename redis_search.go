@@ -197,6 +197,7 @@ type RedisSearchQuery struct {
 	filtersNotTags     map[string][][]string
 	filtersString      map[string][][]string
 	filtersNotString   map[string][][]string
+	filtersOrder       map[string]int
 	inKeys             []interface{}
 	inFields           []interface{}
 	toReturn           []interface{}
@@ -402,11 +403,36 @@ func (q *RedisSearchQuery) AppendQueryRaw(query string) *RedisSearchQuery {
 	return q
 }
 
+func (q *RedisSearchQuery) setFieldOrder(field string) {
+	if q.filtersOrder == nil {
+		q.filtersOrder = make(map[string]int)
+	}
+
+	_, has := q.filtersOrder[field]
+	if !has {
+		q.filtersOrder[field] = len(q.filtersOrder)
+	}
+}
+
+func (q *RedisSearchQuery) getFieldsOrdered() []string {
+	if q.filtersOrder == nil {
+		return nil
+	}
+
+	fields := make([]string, len(q.filtersOrder))
+	for field, order := range q.filtersOrder {
+		fields[order] = field
+	}
+
+	return fields
+}
+
 func (q *RedisSearchQuery) filterNumericMinMax(field string, min, max string) *RedisSearchQuery {
 	if q.filtersNumeric == nil {
 		q.filtersNumeric = make(map[string][][]string)
 	}
 	q.filtersNumeric[field] = append(q.filtersNumeric[field], []string{min, max})
+	q.setFieldOrder(field)
 	return q
 }
 
@@ -415,6 +441,7 @@ func (q *RedisSearchQuery) filterNotNumeric(field string, val string) *RedisSear
 		q.filtersNotNumeric = make(map[string][]string)
 	}
 	q.filtersNotNumeric[field] = append(q.filtersNotNumeric[field], val)
+	q.setFieldOrder(field)
 	return q
 }
 
@@ -576,6 +603,7 @@ func (q *RedisSearchQuery) filterString(field string, exactPhrase, not, starts b
 	} else {
 		q.filtersString[field] = append(q.filtersString[field], valueEscaped)
 	}
+	q.setFieldOrder(field)
 	return q
 }
 
@@ -691,6 +719,7 @@ func (q *RedisSearchQuery) FilterTag(field string, tag ...string) *RedisSearchQu
 		tagEscaped[i] = v
 	}
 	q.filtersTags[field] = append(q.filtersTags[field], tagEscaped)
+	q.setFieldOrder(field)
 	return q
 }
 
@@ -708,6 +737,7 @@ func (q *RedisSearchQuery) FilterNotTag(field string, tag ...string) *RedisSearc
 		tagEscaped[i] = v
 	}
 	q.filtersNotTags[field] = append(q.filtersNotTags[field], tagEscaped)
+	q.setFieldOrder(field)
 	return q
 }
 
@@ -955,7 +985,7 @@ func (r *RedisSearch) GetPoolConfig() RedisPoolConfig {
 func (r *RedisSearch) search(index string, query *RedisSearchQuery, pager *Pager, noContent bool) (total uint64, rows []interface{}) {
 	index = r.redis.addNamespacePrefix(index)
 	args := []interface{}{"FT.SEARCH", index}
-	args = r.buildQueryArgs(query, args)
+	args = r.buildQueryArgsOrdered(query, args)
 
 	if noContent {
 		args = append(args, "NOCONTENT")
@@ -1097,6 +1127,82 @@ func (r *RedisSearch) buildQueryArgs(query *RedisSearchQuery, args []interface{}
 				q += " "
 			}
 			q += "-@" + field + ":( " + strings.Join(v, " | ") + " )"
+		}
+	}
+	if query.hasFakeDelete && !query.withFakeDelete {
+		q += "-@FakeDelete:{true}"
+	}
+	if q == "" {
+		q = "*"
+	}
+	args = append(args, q)
+
+	for field, data := range query.filtersGeo {
+		args = append(args, "GEOFILTER", field, data[0], data[1], data[2], data[3])
+	}
+	return args
+}
+
+func (r *RedisSearch) buildQueryArgsOrdered(query *RedisSearchQuery, args []interface{}) []interface{} {
+	q := query.query
+	for _, field := range query.getFieldsOrdered() {
+		inNumeric, has := query.filtersNumeric[field]
+		if has {
+			if q != "" {
+				q += " "
+			}
+			for i, v := range inNumeric {
+				if i > 0 {
+					q += "|"
+				}
+				q += "@" + field + ":"
+				q += "[" + v[0] + " " + v[1] + "]"
+			}
+		}
+		inTags, has := query.filtersTags[field]
+		if has {
+			for _, v := range inTags {
+				if q != "" {
+					q += " "
+				}
+				q += "@" + field + ":{ " + strings.Join(v, " | ") + " }"
+			}
+		}
+		inString, has := query.filtersString[field]
+		if has {
+			for _, v := range inString {
+				if q != "" {
+					q += " "
+				}
+				q += "@" + field + ":( " + strings.Join(v, " | ") + " )"
+			}
+		}
+		inNotNumeric, has := query.filtersNotNumeric[field]
+		if has {
+			if q != "" {
+				q += " "
+			}
+			for _, v := range inNotNumeric {
+				q += "(@" + field + ":[-inf (" + v + "] | @" + field + ":[(" + v + " +inf])"
+			}
+		}
+		inNotTags, has := query.filtersNotTags[field]
+		if has {
+			for _, v := range inNotTags {
+				if q != "" {
+					q += " "
+				}
+				q += "-@" + field + ":{ " + strings.Join(v, " | ") + " }"
+			}
+		}
+		inNotString, has := query.filtersNotString[field]
+		if has {
+			for _, v := range inNotString {
+				if q != "" {
+					q += " "
+				}
+				q += "-@" + field + ":( " + strings.Join(v, " | ") + " )"
+			}
 		}
 	}
 	if query.hasFakeDelete && !query.withFakeDelete {
