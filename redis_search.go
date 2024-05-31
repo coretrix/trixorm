@@ -189,36 +189,37 @@ func NewRedisSearchQuery() *RedisSearchQuery {
 }
 
 type RedisSearchQuery struct {
-	query              string
-	filtersNumeric     map[string][][]string
-	filtersNotNumeric  map[string][]string
-	filtersGeo         map[string][]interface{}
-	filtersTags        map[string][][]string
-	filtersNotTags     map[string][][]string
-	filtersString      map[string][][]string
-	filtersNotString   map[string][][]string
-	filtersOrder       map[string]int
-	inKeys             []interface{}
-	inFields           []interface{}
-	toReturn           []interface{}
-	sortDesc           bool
-	sortField          string
-	verbatim           bool
-	noStopWords        bool
-	withScores         bool
-	slop               int
-	inOrder            bool
-	lang               string
-	explainScore       bool
-	highlight          []interface{}
-	highlightOpenTag   string
-	highlightCloseTag  string
-	summarize          []interface{}
-	summarizeSeparator string
-	summarizeFrags     int
-	summarizeLen       int
-	withFakeDelete     bool
-	hasFakeDelete      bool
+	query                string
+	rawQueryAfterFilters string
+	filtersNumeric       map[string][][]string
+	filtersNotNumeric    map[string][]string
+	filtersGeo           map[string][]interface{}
+	filtersTags          map[string][][]string
+	filtersNotTags       map[string][][]string
+	filtersString        map[string][][]string
+	filtersNotString     map[string][][]string
+	filtersOrder         map[string]int
+	inKeys               []interface{}
+	inFields             []interface{}
+	toReturn             []interface{}
+	sortDesc             bool
+	sortField            string
+	verbatim             bool
+	noStopWords          bool
+	withScores           bool
+	slop                 int
+	inOrder              bool
+	lang                 string
+	explainScore         bool
+	highlight            []interface{}
+	highlightOpenTag     string
+	highlightCloseTag    string
+	summarize            []interface{}
+	summarizeSeparator   string
+	summarizeFrags       int
+	summarizeLen         int
+	withFakeDelete       bool
+	hasFakeDelete        bool
 }
 
 type AggregateReduce struct {
@@ -400,6 +401,11 @@ func (q *RedisSearchQuery) QueryRaw(query string) *RedisSearchQuery {
 
 func (q *RedisSearchQuery) AppendQueryRaw(query string) *RedisSearchQuery {
 	q.query += query
+	return q
+}
+
+func (q *RedisSearchQuery) AppendQueryRawAfterFilters(query string) *RedisSearchQuery {
+	q.rawQueryAfterFilters += query
 	return q
 }
 
@@ -1207,6 +1213,12 @@ func (r *RedisSearch) buildQueryArgsOrdered(query *RedisSearchQuery, args []inte
 	}
 	if query.hasFakeDelete && !query.withFakeDelete {
 		q += "-@FakeDelete:{true}"
+	}
+	if query.rawQueryAfterFilters != "" {
+		if q != "" {
+			q += " "
+		}
+		q += query.rawQueryAfterFilters
 	}
 	if q == "" {
 		q = "*"
