@@ -1194,6 +1194,8 @@ func (r *RedisSearch) buildQueryArgsOrdered(query *RedisSearchQuery, args []inte
 				q += "(@" + field + ":[-inf (" + v + "] | @" + field + ":[(" + v + " +inf])"
 			}
 		}
+	}
+	for _, field := range query.getFieldsOrdered() {
 		inNotTags, has := query.filtersNotTags[field]
 		if has {
 			for _, v := range inNotTags {
@@ -1203,6 +1205,8 @@ func (r *RedisSearch) buildQueryArgsOrdered(query *RedisSearchQuery, args []inte
 				q += "-@" + field + ":{ " + strings.Join(v, " | ") + " }"
 			}
 		}
+	}
+	for _, field := range query.getFieldsOrdered() {
 		inNotString, has := query.filtersNotString[field]
 		if has {
 			for _, v := range inNotString {
