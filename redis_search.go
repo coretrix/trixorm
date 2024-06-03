@@ -1183,6 +1183,8 @@ func (r *RedisSearch) buildQueryArgsOrdered(query *RedisSearchQuery, args []inte
 				q += "@" + field + ":( " + strings.Join(v, " | ") + " )"
 			}
 		}
+	}
+	for _, field := range query.getFieldsOrdered() {
 		inNotNumeric, has := query.filtersNotNumeric[field]
 		if has {
 			if q != "" {
