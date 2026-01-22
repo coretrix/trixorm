@@ -1036,3 +1036,28 @@ func (r *RedisCache) removeNamespacePrefix(key string) string {
 	prefixLen := len(r.config.GetNamespace()) + 1
 	return key[prefixLen:]
 }
+
+func (r *RedisCache) Subscribe(channels ...string) *redis.PubSub {
+	if r.config.HasNamespace() {
+		for i, channel := range channels {
+			channels[i] = r.addNamespacePrefix(channel)
+		}
+	}
+	start := getNow(r.engine.hasRedisLogger)
+	pubSub := r.client.Subscribe(context.Background(), channels...)
+	if r.engine.hasRedisLogger {
+		r.fillLogFields("SUBSCRIBE", "SUBSCRIBE "+strings.Join(channels, " "), start, false, nil)
+	}
+	return pubSub
+}
+
+func (r *RedisCache) Publish(channel string, message interface{}) int64 {
+	channel = r.addNamespacePrefix(channel)
+	start := getNow(r.engine.hasRedisLogger)
+	val, err := r.client.Publish(context.Background(), channel, message).Result()
+	if r.engine.hasRedisLogger {
+		r.fillLogFields("PUBLISH", "PUBLISH "+channel+" "+fmt.Sprintf("%v", message), start, false, err)
+	}
+	checkError(err)
+	return val
+}
