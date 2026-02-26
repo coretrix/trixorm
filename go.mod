@@ -1,4 +1,4 @@
-module github.com/latolukasz/beeorm
+module github.com/coretrix/trixorm
 
 go 1.17
 
