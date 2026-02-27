@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
@@ -23,13 +23,8 @@ func (h *testLogHandler) clear() {
 }
 
 func prepareTables(t *testing.T, registry *Registry, mySQLVersion int, redisNamespace, redisSearchVersion string, entities ...Entity) (engine *Engine, def func()) {
-	if mySQLVersion == 5 {
-		registry.RegisterMySQLPool("root:root@tcp(localhost:3311)/test?limit_connections=10")
-		registry.RegisterMySQLPool("root:root@tcp(localhost:3311)/test_log", "log")
-	} else {
-		registry.RegisterMySQLPool("root:root@tcp(localhost:3312)/test")
-		registry.RegisterMySQLPool("root:root@tcp(localhost:3312)/test_log", "log")
-	}
+	registry.RegisterMySQLPool("root:root@tcp(localhost:3312)/test?limit_connections=10")
+	registry.RegisterMySQLPool("root:root@tcp(localhost:3312)/test_log", "log")
 	if redisSearchVersion == "2.0" {
 		registry.RegisterRedis("localhost:6382", redisNamespace, 15)
 		registry.RegisterRedis("localhost:6382", redisNamespace, 14, "default_queue")

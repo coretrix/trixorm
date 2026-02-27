@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
@@ -13,7 +13,7 @@ type lazyReceiverEntity struct {
 	ID           uint
 	Name         string `orm:"unique=name"`
 	Age          uint64
-	EnumNullable string `orm:"enum=beeorm.TestEnum"`
+	EnumNullable string `orm:"enum=trixorm.TestEnum"`
 	RefOne       *lazyReceiverReference
 	IndexAll     *CachedQuery `query:""`
 }
@@ -29,7 +29,7 @@ func TestBackgroundConsumer(t *testing.T) {
 	var ref *lazyReceiverReference
 
 	registry := &Registry{}
-	registry.RegisterEnum("beeorm.TestEnum", []string{"a", "b", "c"})
+	registry.RegisterEnum("trixorm.TestEnum", []string{"a", "b", "c"})
 	engine, def := prepareTables(t, registry, 5, "", "2.0", entity, ref)
 	defer def()
 	engine.GetRedis().FlushDB()

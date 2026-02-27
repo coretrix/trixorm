@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 func clearByIDs(engine *Engine, entity Entity, ids ...uint64) {
 	schema := initIfNeeded(engine.registry, entity).tableSchema

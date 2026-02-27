@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 type Pager struct {
 	CurrentPage int
