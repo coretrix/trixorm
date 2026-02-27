@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
@@ -226,7 +226,7 @@ func testCachedSearch(t *testing.T, localCache bool, redisCache bool) {
 	assert.PanicsWithError(t, "reference WrongReference in cachedSearchEntity is not valid", func() {
 		engine.CachedSearchWithReferences(&rows, "IndexAge", nil, []interface{}{10}, []string{"WrongReference"})
 	})
-	assert.PanicsWithError(t, "interface *beeorm.cachedSearchEntity is no slice of beeorm.Entity", func() {
+	assert.PanicsWithError(t, "interface *trixorm.cachedSearchEntity is no slice of trixorm.Entity", func() {
 		engine.CachedSearchWithReferences(entity, "IndexAge", nil, []interface{}{10}, []string{"WrongReference"})
 	})
 
@@ -269,11 +269,11 @@ func TestCachedSearchErrors(t *testing.T) {
 	engine, def := prepareTables(t, &Registry{}, 5, "", "2.0")
 	defer def()
 	var rows []*cachedSearchEntity
-	assert.PanicsWithError(t, "entity 'beeorm.cachedSearchEntity' is not registered", func() {
+	assert.PanicsWithError(t, "entity 'trixorm.cachedSearchEntity' is not registered", func() {
 		_ = engine.CachedSearch(&rows, "IndexAge", nil, 10)
 	})
 	var row cachedSearchEntity
-	assert.PanicsWithError(t, "entity 'beeorm.cachedSearchEntity' is not registered", func() {
+	assert.PanicsWithError(t, "entity 'trixorm.cachedSearchEntity' is not registered", func() {
 		_ = engine.CachedSearchOne(&row, "IndexName", 10)
 	})
 
@@ -295,12 +295,12 @@ func TestCachedSearchErrors(t *testing.T) {
 	})
 
 	var rows2 []*cachedSearchRefEntity
-	assert.PanicsWithError(t, "cache search not allowed for entity without cache: 'beeorm.cachedSearchRefEntity'", func() {
+	assert.PanicsWithError(t, "cache search not allowed for entity without cache: 'trixorm.cachedSearchRefEntity'", func() {
 		_ = engine.CachedSearch(&rows2, "IndexAll", nil, 10)
 	})
 
 	var row2 cachedSearchRefEntity
-	assert.PanicsWithError(t, "cache search not allowed for entity without cache: 'beeorm.cachedSearchRefEntity'", func() {
+	assert.PanicsWithError(t, "cache search not allowed for entity without cache: 'trixorm.cachedSearchRefEntity'", func() {
 		_ = engine.CachedSearchOne(&row2, "IndexName", 10)
 	})
 }
@@ -309,7 +309,7 @@ func BenchmarkCachedSearch(b *testing.B) {
 	entity := &schemaEntity{}
 	ref := &schemaEntityRef{}
 	registry := &Registry{}
-	registry.RegisterEnumStruct("beeorm.TestEnum", TestEnum)
+	registry.RegisterEnumStruct("trixorm.TestEnum", TestEnum)
 	registry.RegisterLocalCache(10000)
 	engine, def := prepareTables(nil, registry, 5, "", "2.0", entity, ref)
 	defer def()

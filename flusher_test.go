@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
@@ -51,7 +51,7 @@ type benchmarkIsDirtyEntity struct {
 	CreatedAt                                   time.Time    `orm:"time=true;index=index_created_at"`
 	LastActiveAt                                time.Time    `orm:"time=true;index=index_last_active_at"`
 	Guild                                       *flushEntity ``
-	GuildRank                                   string       `orm:"enum=beeorm.TestSet"`
+	GuildRank                                   string       `orm:"enum=trixorm.TestSet"`
 	Lang                                        string       `orm:"length=2"`
 	CountryCode                                 string       `orm:"length=8"`
 	Level                                       uint8        `orm:"index=index_level"`
@@ -331,10 +331,10 @@ type flushEntity struct {
 	ReferenceManyRequired []*flushEntityReference `orm:"required"`
 	StringSlice           []string
 	StringSliceNotNull    []string `orm:"required"`
-	SetNullable           []string `orm:"set=beeorm.TestSet"`
-	SetNotNull            []string `orm:"set=beeorm.TestSet;required"`
-	EnumNullable          string   `orm:"enum=beeorm.TestEnum"`
-	EnumNotNull           string   `orm:"enum=beeorm.TestEnum;required"`
+	SetNullable           []string `orm:"set=trixorm.TestSet"`
+	SetNotNull            []string `orm:"set=trixorm.TestSet;required"`
+	EnumNullable          string   `orm:"enum=trixorm.TestEnum"`
+	EnumNotNull           string   `orm:"enum=trixorm.TestEnum;required"`
 	Ignored               []string `orm:"ignore"`
 	Blob                  []uint8
 	Bool                  bool
@@ -400,8 +400,8 @@ func testFlush(t *testing.T, local bool, redis bool) {
 	var reference *flushEntityReference
 	registry := &Registry{}
 	registry.RegisterRedisStream("entity_changed", "default", []string{"test-group-1"})
-	registry.RegisterEnumStruct("beeorm.TestEnum", TestEnum)
-	registry.RegisterEnumStruct("beeorm.TestSet", TestSet)
+	registry.RegisterEnumStruct("trixorm.TestEnum", TestEnum)
+	registry.RegisterEnumStruct("trixorm.TestSet", TestSet)
 	engine, def := prepareTables(t, registry, 5, "", "2.0", entity, reference)
 	defer def()
 
@@ -524,7 +524,7 @@ func testFlush(t *testing.T, local bool, redis bool) {
 	assert.Nil(t, entity.FlushStructPtr)
 
 	entity.ReferenceOne.Name = "John 2"
-	assert.PanicsWithError(t, fmt.Sprintf("entity is not loaded and can't be updated: beeorm.flushEntityReference [%d]", refOneID), func() {
+	assert.PanicsWithError(t, fmt.Sprintf("entity is not loaded and can't be updated: trixorm.flushEntityReference [%d]", refOneID), func() {
 		engine.Flush(entity.ReferenceOne)
 	})
 
@@ -1113,8 +1113,8 @@ func BenchmarkFlusherUpdateNoCache(b *testing.B) {
 func BenchmarkIsDirty(b *testing.B) {
 	var entity *benchmarkIsDirtyEntity
 	registry := &Registry{}
-	registry.RegisterEnum("beeorm.TestEnum", []string{"a", "b", "c"})
-	registry.RegisterEnum("beeorm.TestSet", []string{"a", "b", "c"})
+	registry.RegisterEnum("trixorm.TestEnum", []string{"a", "b", "c"})
+	registry.RegisterEnum("trixorm.TestSet", []string{"a", "b", "c"})
 	registry.RegisterRedisStream("entity_changed", "default", []string{"test-group-1"})
 	engine, def := prepareTables(nil, registry, 5, "", "2.0",
 		entity, &flushEntity{}, &flushEntityReference{})
@@ -1372,7 +1372,7 @@ func benchmarkFlusher(b *testing.B, useLocalCache, useRedisCache bool) {
 	var entity *flushEntityBenchmark
 	registry := &Registry{}
 	registry.RegisterRedisStream("entity_changed", "default", []string{"test-group-1"})
-	registry.RegisterEnum("beeorm.TestEnum", []string{"a", "b", "c"})
+	registry.RegisterEnum("trixorm.TestEnum", []string{"a", "b", "c"})
 	engine, def := prepareTables(nil, registry, 5, "", "2.0", entity)
 	defer def()
 

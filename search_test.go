@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"fmt"
@@ -81,7 +81,7 @@ func TestSearch(t *testing.T) {
 	assert.True(t, entity.ReferenceMany[2].IsLoaded())
 
 	engine, _ = prepareTables(t, &Registry{}, 5, "", "2.0")
-	assert.PanicsWithError(t, "entity 'beeorm.searchEntity' is not registered", func() {
+	assert.PanicsWithError(t, "entity 'trixorm.searchEntity' is not registered", func() {
 		engine.Search(NewWhere("ID > 0"), nil, &rows)
 	})
 }

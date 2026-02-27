@@ -1,7 +1,7 @@
 package tools
 
 import (
-	orm "github.com/latolukasz/beeorm"
+	orm "github.com/coretrix/trixorm"
 )
 
 type RedisSearchStatistics struct {

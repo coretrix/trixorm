@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"testing"
@@ -98,8 +98,8 @@ type schemaEntity struct {
 	RefOne         *schemaEntityRef
 	RefMany        []*schemaEntityRef
 	Decimal        float32  `orm:"decimal=10,2"`
-	Enum           string   `orm:"enum=beeorm.TestEnum;required"`
-	Set            []string `orm:"set=beeorm.TestEnum;required"`
+	Enum           string   `orm:"enum=trixorm.TestEnum;required"`
+	Set            []string `orm:"set=trixorm.TestEnum;required"`
 	FakeDelete     bool
 	IndexAll       *CachedQuery `query:""`
 }
@@ -116,7 +116,7 @@ func testSchema(t *testing.T, version int) {
 	entity := &schemaEntity{}
 	ref := &schemaEntityRef{}
 	registry := &Registry{}
-	registry.RegisterEnumStruct("beeorm.TestEnum", TestEnum, "b")
+	registry.RegisterEnumStruct("trixorm.TestEnum", TestEnum, "b")
 	engine, def := prepareTables(t, registry, version, "", "2.0", entity, ref)
 	defer def()
 
@@ -228,7 +228,7 @@ func testSchema(t *testing.T, version int) {
 	engine.GetMysql().Exec(alters[1].SQL)
 
 	schema := engine.GetRegistry().GetTableSchemaForEntity(entity)
-	assert.Equal(t, "beeorm.schemaEntity", schema.GetType().String())
+	assert.Equal(t, "trixorm.schemaEntity", schema.GetType().String())
 	references := schema.GetReferences()
 	assert.Len(t, references, 2)
 	columns := schema.GetColumns()
@@ -272,20 +272,20 @@ func testSchema(t *testing.T, version int) {
 	registry.RegisterMySQLPool(pool)
 	registry.RegisterEntity(&schemaInvalidIndexEntity{})
 	_, _, err := registry.Validate()
-	assert.EqualError(t, err, "invalid entity struct 'beeorm.schemaInvalidIndexEntity': invalid index position 'invalid' in index 'TestIndex'")
+	assert.EqualError(t, err, "invalid entity struct 'trixorm.schemaInvalidIndexEntity': invalid index position 'invalid' in index 'TestIndex'")
 
 	registry = &Registry{}
 	registry.RegisterMySQLPool(pool)
 	registry.RegisterEntity(&schemaInvalidMaxStringEntity{})
 	_, _, err = registry.Validate()
-	assert.EqualError(t, err, "invalid entity struct 'beeorm.schemaInvalidMaxStringEntity': invalid max string: invalid")
+	assert.EqualError(t, err, "invalid entity struct 'trixorm.schemaInvalidMaxStringEntity': invalid max string: invalid")
 
 	registry = &Registry{}
 	registry.RegisterMySQLPool(pool)
 	registry.RegisterLocalCache(1000)
 	registry.RegisterEntity(&schemaEntity{})
 	_, _, err = registry.Validate()
-	assert.EqualError(t, err, "invalid entity struct 'beeorm.schemaEntity': unregistered enum beeorm.TestEnum")
+	assert.EqualError(t, err, "invalid entity struct 'trixorm.schemaEntity': unregistered enum trixorm.TestEnum")
 
 	engine, _ = prepareTables(t, &Registry{}, 5, "", "2.0", &schemaToDropEntity{})
 	schema = engine.GetRegistry().GetTableSchemaForEntity(&schemaToDropEntity{})
@@ -356,7 +356,7 @@ func testSchema(t *testing.T, version int) {
 	}
 	registry.RegisterEntity(&invalidSchema6{})
 	_, _, err = registry.Validate()
-	assert.EqualError(t, err, "missing unique index for cached query 'IndexName' in beeorm.invalidSchema6")
+	assert.EqualError(t, err, "missing unique index for cached query 'IndexName' in trixorm.invalidSchema6")
 
 	registry = &Registry{}
 	registry.RegisterMySQLPool(pool)
@@ -368,7 +368,7 @@ func testSchema(t *testing.T, version int) {
 	}
 	registry.RegisterEntity(&invalidSchema7{})
 	_, _, err = registry.Validate()
-	assert.EqualError(t, err, "missing index for cached query 'IndexName' in beeorm.invalidSchema7")
+	assert.EqualError(t, err, "missing index for cached query 'IndexName' in trixorm.invalidSchema7")
 
 	registry = &Registry{}
 	registry.RegisterMySQLPool(pool)
@@ -381,7 +381,7 @@ func testSchema(t *testing.T, version int) {
 	}
 	registry.RegisterEntity(&invalidSchema8{})
 	_, _, err = registry.Validate()
-	assert.EqualError(t, err, "missing unique index for cached query 'IndexName' in beeorm.invalidSchema8")
+	assert.EqualError(t, err, "missing unique index for cached query 'IndexName' in trixorm.invalidSchema8")
 
 	registry = &Registry{}
 	registry.RegisterMySQLPool(pool)
@@ -394,5 +394,5 @@ func testSchema(t *testing.T, version int) {
 	}
 	registry.RegisterEntity(&invalidSchema9{})
 	_, _, err = registry.Validate()
-	assert.EqualError(t, err, "missing index for cached query 'IndexName' in beeorm.invalidSchema9")
+	assert.EqualError(t, err, "missing index for cached query 'IndexName' in trixorm.invalidSchema9")
 }

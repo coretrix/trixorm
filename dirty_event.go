@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 type DirtyEntityEvent interface {
 	ID() uint64
