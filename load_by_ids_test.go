@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"fmt"
@@ -275,7 +275,7 @@ func testLoadByIds(t *testing.T, local, redis bool) {
 
 	engine, def = prepareTables(t, &Registry{}, 5, "", "2.0")
 	defer def()
-	assert.PanicsWithError(t, "entity 'beeorm.loadByIdsEntity' is not registered", func() {
+	assert.PanicsWithError(t, "entity 'trixorm.loadByIdsEntity' is not registered", func() {
 		engine.LoadByIDs([]uint64{1}, &rows)
 	})
 }
@@ -289,7 +289,7 @@ func benchmarkLoadByIDsLocalCache(b *testing.B) {
 	entity := &schemaEntity{}
 	ref := &schemaEntityRef{}
 	registry := &Registry{}
-	registry.RegisterEnumStruct("beeorm.TestEnum", TestEnum)
+	registry.RegisterEnumStruct("trixorm.TestEnum", TestEnum)
 	registry.RegisterLocalCache(10000)
 	engine, def := prepareTables(nil, registry, 5, "", "2.0", entity, ref)
 	defer def()

@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"context"

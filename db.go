@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
@@ -485,7 +485,14 @@ func (db *DB) convertToError(err error) error {
 			var abortLabelReg, _ = regexp.Compile(` for key '(.*?)'`)
 			labels := abortLabelReg.FindStringSubmatch(sqlErr.Message)
 			if len(labels) > 0 {
-				return &DuplicatedKeyError{Message: sqlErr.Message, Index: labels[1]}
+				index := labels[1]
+				message := sqlErr.Message
+				if dotPosition := strings.LastIndex(index, "."); dotPosition >= 0 {
+					normalizedIndex := index[dotPosition+1:]
+					message = strings.Replace(message, "for key '"+index+"'", "for key '"+normalizedIndex+"'", 1)
+				}
+
+				return &DuplicatedKeyError{Message: message, Index: index}
 			}
 		} else if sqlErr.Number == 1451 || sqlErr.Number == 1452 {
 			var abortLabelReg, _ = regexp.Compile(" CONSTRAINT `(.*?)`")

@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
@@ -338,16 +338,22 @@ func TestRedisStreamGroupConsumer(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		engine.GetEventBroker().Publish("test-stream", testEvent{fmt.Sprintf("a%d", i)})
 	}
+	done := make(chan struct{})
 	go func() {
-		consumer = broker.Consumer("test-group")
-		consumer.DisableLoop()
-		consumer.(*eventsConsumer).blockTime = time.Millisecond * 10
-		consumer.Consume(context.Background(), 8, func(events []Event) {
+		asyncConsumer := broker.Consumer("test-group")
+		asyncConsumer.DisableLoop()
+		asyncConsumer.(*eventsConsumer).blockTime = time.Millisecond * 10
+		asyncConsumer.Consume(context.Background(), 8, func(events []Event) {
 			iterations++
 			messages += len(events)
 		})
+		close(done)
 	}()
-	time.Sleep(time.Millisecond * 100)
+	select {
+	case <-done:
+	case <-time.After(time.Millisecond * 100):
+		t.Fatal("timed out waiting for consumer")
+	}
 	assert.Equal(t, 2, iterations)
 	assert.Equal(t, 10, messages)
 
@@ -425,7 +431,9 @@ func TestRedisStreamGroupConsumer(t *testing.T) {
 	consumer = broker.Consumer("test-group")
 	incr := 0
 	start := time.Now()
+	done = make(chan struct{})
 	go func() {
+		defer close(done)
 		consumer.ConsumeMany(ctxCancel, 1, 1, func(events []Event) {
 			incr++
 			time.Sleep(time.Millisecond * 50)
@@ -433,6 +441,11 @@ func TestRedisStreamGroupConsumer(t *testing.T) {
 	}()
 	time.Sleep(time.Millisecond * 200)
 	stop()
+	select {
+	case <-done:
+	case <-time.After(time.Millisecond * 100):
+		t.Fatal("timed out waiting for consumer")
+	}
 	assert.Equal(t, 4, incr)
 	assert.Less(t, time.Since(start).Milliseconds(), int64(500))
 

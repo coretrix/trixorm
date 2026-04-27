@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"database/sql"
@@ -714,7 +714,7 @@ func checkColumn(engine *Engine, schema *tableSchema, field *reflect.StructField
 		definition, addNotNullIfNotSet, addDefaultNullIfNullable, defaultValue = handleTime(attributes, true)
 	case "[]uint8":
 		definition, addDefaultNullIfNullable = handleBlob(attributes)
-	case "*beeorm.CachedQuery":
+	case "*trixorm.CachedQuery":
 		return nil, nil
 	default:
 		kind := field.Type.Kind().String()

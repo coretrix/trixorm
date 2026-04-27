@@ -1,9 +1,10 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -725,18 +726,124 @@ func (r *RedisCache) XRevRange(stream, start, stop string, count int64) []redis.
 func (r *RedisCache) XInfoStream(stream string) *redis.XInfoStream {
 	stream = r.addNamespacePrefix(stream)
 	start := getNow(r.engine.hasRedisLogger)
-	info, err := r.client.XInfoStream(context.Background(), stream).Result()
+	rawInfo, err := r.client.Do(context.Background(), "XINFO", "STREAM", stream).Result()
 	if r.engine.hasRedisLogger {
 		r.fillLogFields("XINFOSTREAM", "XINFOSTREAM "+stream, start, false, err)
 	}
 	checkError(err)
+	return parseRedisXInfoStream(rawInfo)
+}
+
+func redisXInfoString(value interface{}) string {
+	switch typedValue := value.(type) {
+	case string:
+		return typedValue
+	case []byte:
+		return string(typedValue)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(typedValue)
+	}
+}
+
+func redisXInfoInt64(value interface{}) int64 {
+	switch typedValue := value.(type) {
+	case int64:
+		return typedValue
+	case int:
+		return int64(typedValue)
+	case uint64:
+		return int64(typedValue)
+	default:
+		parsedValue, _ := strconv.ParseInt(redisXInfoString(value), 10, 64)
+
+		return parsedValue
+	}
+}
+
+func parseRedisXMessage(raw interface{}) redis.XMessage {
+	rawValues, ok := raw.([]interface{})
+	if !ok || len(rawValues) < 2 {
+		return redis.XMessage{}
+	}
+	message := redis.XMessage{
+		ID:     redisXInfoString(rawValues[0]),
+		Values: make(map[string]interface{}),
+	}
+	rawFields, ok := rawValues[1].([]interface{})
+	if !ok {
+		return message
+	}
+	for i := 0; i < len(rawFields)-1; i += 2 {
+		message.Values[redisXInfoString(rawFields[i])] = rawFields[i+1]
+	}
+
+	return message
+}
+
+func parseRedisXInfoStream(raw interface{}) *redis.XInfoStream {
+	rawValues, ok := raw.([]interface{})
+	if !ok {
+		return &redis.XInfoStream{}
+	}
+	info := &redis.XInfoStream{}
+	for i := 0; i < len(rawValues)-1; i += 2 {
+		switch redisXInfoString(rawValues[i]) {
+		case "length":
+			info.Length = redisXInfoInt64(rawValues[i+1])
+		case "radix-tree-keys":
+			info.RadixTreeKeys = redisXInfoInt64(rawValues[i+1])
+		case "radix-tree-nodes":
+			info.RadixTreeNodes = redisXInfoInt64(rawValues[i+1])
+		case "groups":
+			info.Groups = redisXInfoInt64(rawValues[i+1])
+		case "last-generated-id":
+			info.LastGeneratedID = redisXInfoString(rawValues[i+1])
+		case "first-entry":
+			info.FirstEntry = parseRedisXMessage(rawValues[i+1])
+		case "last-entry":
+			info.LastEntry = parseRedisXMessage(rawValues[i+1])
+		}
+	}
+
 	return info
+}
+
+func parseRedisXInfoGroups(raw interface{}) []redis.XInfoGroup {
+	rawGroups, ok := raw.([]interface{})
+	if !ok {
+		return make([]redis.XInfoGroup, 0)
+	}
+	groups := make([]redis.XInfoGroup, 0, len(rawGroups))
+	for _, rawGroup := range rawGroups {
+		rawValues, ok := rawGroup.([]interface{})
+		if !ok {
+			continue
+		}
+		group := redis.XInfoGroup{}
+		for i := 0; i < len(rawValues)-1; i += 2 {
+			switch redisXInfoString(rawValues[i]) {
+			case "name":
+				group.Name = redisXInfoString(rawValues[i+1])
+			case "consumers":
+				group.Consumers = redisXInfoInt64(rawValues[i+1])
+			case "pending":
+				group.Pending = redisXInfoInt64(rawValues[i+1])
+			case "last-delivered-id":
+				group.LastDeliveredID = redisXInfoString(rawValues[i+1])
+			}
+		}
+		groups = append(groups, group)
+	}
+
+	return groups
 }
 
 func (r *RedisCache) XInfoGroups(stream string) []redis.XInfoGroup {
 	stream = r.addNamespacePrefix(stream)
 	start := getNow(r.engine.hasRedisLogger)
-	info, err := r.client.XInfoGroups(context.Background(), stream).Result()
+	rawInfo, err := r.client.Do(context.Background(), "XINFO", "GROUPS", stream).Result()
 	if err != nil && err.Error() == "ERR no such key" {
 		if r.engine.hasRedisLogger {
 			r.fillLogFields("XINFOGROUPS", "XINFOGROUPS "+stream, start, false, err)
@@ -747,6 +854,7 @@ func (r *RedisCache) XInfoGroups(stream string) []redis.XInfoGroup {
 		r.fillLogFields("XINFOGROUPS", "XINFOGROUPS "+stream, start, false, err)
 	}
 	checkError(err)
+	info := parseRedisXInfoGroups(rawInfo)
 	if r.config.HasNamespace() {
 		for i := range info {
 			info[i].Name = r.removeNamespacePrefix(info[i].Name)

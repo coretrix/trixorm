@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"reflect"
@@ -37,7 +37,7 @@ func TestValidatedRegistry(t *testing.T) {
 	assert.NotNil(t, source)
 	entities := validated.GetEntities()
 	assert.Len(t, entities, 1)
-	assert.Equal(t, reflect.TypeOf(validatedRegistryEntity{}), entities["beeorm.validatedRegistryEntity"])
+	assert.Equal(t, reflect.TypeOf(validatedRegistryEntity{}), entities["trixorm.validatedRegistryEntity"])
 	assert.Nil(t, validated.GetTableSchema("invalid"))
 
 	enum := validated.GetEnum("enum_map")
@@ -62,7 +62,7 @@ func TestValidatedRegistry(t *testing.T) {
 	assert.NotNil(t, mysqlPools["default"])
 	assert.Equal(t, "default", mysqlPools["default"].GetCode())
 	assert.Equal(t, "test", mysqlPools["default"].GetDatabase())
-	assert.Equal(t, 5, mysqlPools["default"].GetVersion())
+	assert.Equal(t, 8, mysqlPools["default"].GetVersion())
 	assert.Equal(t, "root:root@tcp(localhost:3311)/test?multiStatements=true", mysqlPools["default"].GetDataSourceURI())
 
 	localCachePools := validated.GetLocalCachePools()
@@ -74,7 +74,7 @@ func TestValidatedRegistry(t *testing.T) {
 	assert.Equal(t, "another", localCachePools["another"].GetCode())
 	assert.Equal(t, 50, localCachePools["another"].GetLimit())
 
-	assert.PanicsWithError(t, "entity 'beeorm.validatedRegistryNotRegisteredEntity' is not registered", func() {
+	assert.PanicsWithError(t, "entity 'trixorm.validatedRegistryNotRegisteredEntity' is not registered", func() {
 		validated.GetTableSchemaForEntity(&validatedRegistryNotRegisteredEntity{})
 	})
 

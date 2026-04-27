@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
@@ -1355,7 +1355,7 @@ func (r *RedisSearch) dropIndex(indexName string, withHashes bool) bool {
 	if r.engine.hasRedisLogger {
 		r.fillLogFields("FT.DROPINDEX", cmd.String(), start, err)
 	}
-	if err != nil && strings.HasPrefix(err.Error(), "Unknown Index ") {
+	if isRedisSearchMissingIndexError(err) {
 		return false
 	}
 	checkError(err)
@@ -1364,13 +1364,147 @@ func (r *RedisSearch) dropIndex(indexName string, withHashes bool) bool {
 	return true
 }
 
+func isRedisSearchMissingIndexError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unknown index") || strings.Contains(message, "no such index")
+}
+
+func redisSearchInfoValueString(value interface{}) string {
+	switch typedValue := value.(type) {
+	case string:
+		return typedValue
+	case []byte:
+		return string(typedValue)
+	case int:
+		return strconv.Itoa(typedValue)
+	case int64:
+		return strconv.FormatInt(typedValue, 10)
+	case uint64:
+		return strconv.FormatUint(typedValue, 10)
+	case float64:
+		return strconv.FormatFloat(typedValue, 'f', -1, 64)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(typedValue)
+	}
+}
+
+func redisSearchInfoValueFloat(value interface{}) float64 {
+	parsedValue, _ := strconv.ParseFloat(redisSearchInfoValueString(value), 64)
+
+	return parsedValue
+}
+
+func redisSearchInfoValueUint(value interface{}) uint64 {
+	parsedValue, _ := strconv.ParseUint(redisSearchInfoValueString(value), 10, 64)
+
+	return parsedValue
+}
+
+func redisSearchInfoValueInt(value interface{}) int {
+	parsedValue, _ := strconv.Atoi(redisSearchInfoValueString(value))
+
+	return parsedValue
+}
+
+func redisSearchInfoValueIsNaN(value interface{}) bool {
+	if floatValue, ok := value.(float64); ok {
+		return math.IsNaN(floatValue)
+	}
+	stringValue := strings.ToLower(redisSearchInfoValueString(value))
+
+	return stringValue == "-nan" || stringValue == "nan"
+}
+
+func redisSearchInfoValueSlice(value interface{}) []interface{} {
+	values, ok := value.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	return values
+}
+
+func parseRedisSearchInfoFlags(value interface{}, field *RedisSearchIndexInfoField) {
+	for _, rawFlag := range redisSearchInfoValueSlice(value) {
+		switch redisSearchInfoValueString(rawFlag) {
+		case "SORTABLE":
+			field.Sortable = true
+		case "NOSTEM":
+			field.NoStem = true
+		case "NOINDEX":
+			field.NoIndex = true
+		}
+	}
+}
+
+func parseRedisSearchInfoField(definition []interface{}, attributesFormat bool) RedisSearchIndexInfoField {
+	field := RedisSearchIndexInfoField{}
+	if !attributesFormat && len(definition) > 0 {
+		field.Name = redisSearchInfoValueString(definition[0])
+		definition = definition[1:]
+	}
+
+	for fieldIndex := 0; fieldIndex < len(definition); fieldIndex++ {
+		hasNext := fieldIndex+1 < len(definition)
+		switch redisSearchInfoValueString(definition[fieldIndex]) {
+		case "identifier":
+			if hasNext {
+				field.Name = redisSearchInfoValueString(definition[fieldIndex+1])
+			}
+		case "type":
+			if hasNext {
+				field.Type = redisSearchInfoValueString(definition[fieldIndex+1])
+			}
+		case "WEIGHT":
+			if hasNext {
+				field.Weight = redisSearchInfoValueFloat(definition[fieldIndex+1])
+			}
+		case "SORTABLE":
+			field.Sortable = true
+		case "NOSTEM":
+			field.NoStem = true
+		case "NOINDEX":
+			field.NoIndex = true
+		case "SEPARATOR":
+			if hasNext {
+				field.TagSeparator = redisSearchInfoValueString(definition[fieldIndex+1])
+			}
+		case "flags":
+			if hasNext {
+				parseRedisSearchInfoFlags(definition[fieldIndex+1], &field)
+			}
+		}
+	}
+
+	return field
+}
+
+func parseRedisSearchInfoFields(rawFields interface{}, attributesFormat bool) []RedisSearchIndexInfoField {
+	fieldsRaw := redisSearchInfoValueSlice(rawFields)
+	fields := make([]RedisSearchIndexInfoField, 0, len(fieldsRaw))
+	for _, rawField := range fieldsRaw {
+		definition := redisSearchInfoValueSlice(rawField)
+		if len(definition) == 0 {
+			continue
+		}
+		fields = append(fields, parseRedisSearchInfoField(definition, attributesFormat))
+	}
+
+	return fields
+}
+
 func (r *RedisSearch) Info(indexName string) *RedisSearchIndexInfo {
 	indexName = r.redis.addNamespacePrefix(indexName)
 	cmd := redis.NewSliceCmd(r.ctx, "FT.INFO", indexName)
 	start := getNow(r.engine.hasRedisLogger)
 	err := r.redis.client.Process(r.ctx, cmd)
 	has := true
-	if err != nil && err.Error() == "Unknown Index name" {
+	if isRedisSearchMissingIndexError(err) {
 		err = nil
 		has = false
 	}
@@ -1385,18 +1519,21 @@ func (r *RedisSearch) Info(indexName string) *RedisSearchIndexInfo {
 	checkError(err)
 	info := &RedisSearchIndexInfo{}
 	for i, row := range res {
+		if i+1 >= len(res) {
+			continue
+		}
 		switch row {
 		case "index_name":
 			if r.redis.config.HasNamespace() {
-				info.Name = r.redis.removeNamespacePrefix(res[i+1].(string))
+				info.Name = r.redis.removeNamespacePrefix(redisSearchInfoValueString(res[i+1]))
 			} else {
-				info.Name = res[i+1].(string)
+				info.Name = redisSearchInfoValueString(res[i+1])
 			}
 		case "index_options":
-			infoOptions := res[i+1].([]interface{})
+			infoOptions := redisSearchInfoValueSlice(res[i+1])
 			options := RedisSearchIndexInfoOptions{}
 			for _, opt := range infoOptions {
-				switch opt {
+				switch redisSearchInfoValueString(opt) {
 				case "NOFREQS":
 					options.NoFreqs = true
 				case "NOFIELDS":
@@ -1409,145 +1546,79 @@ func (r *RedisSearch) Info(indexName string) *RedisSearchIndexInfo {
 			}
 			info.Options = options
 		case "index_definition":
-			def := res[i+1].([]interface{})
+			def := redisSearchInfoValueSlice(res[i+1])
 			definition := RedisSearchIndexInfoDefinition{}
-			for subKey, subValue := range def {
-				switch subValue {
+			for subKey := 0; subKey < len(def)-1; subKey++ {
+				switch redisSearchInfoValueString(def[subKey]) {
 				case "key_type":
-					definition.KeyType = def[subKey+1].(string)
+					definition.KeyType = redisSearchInfoValueString(def[subKey+1])
 				case "prefixes":
-					prefixesRaw := def[subKey+1].([]interface{})
+					prefixesRaw := redisSearchInfoValueSlice(def[subKey+1])
 					prefixes := make([]string, len(prefixesRaw))
 					for k, v := range prefixesRaw {
-						prefixes[k] = v.(string)
+						prefixes[k] = redisSearchInfoValueString(v)
 					}
 					definition.Prefixes = prefixes
 				case "language_field":
-					definition.LanguageField = def[subKey+1].(string)
+					definition.LanguageField = redisSearchInfoValueString(def[subKey+1])
 				case "default_score":
-					score, _ := strconv.ParseFloat(def[subKey+1].(string), 64)
-					definition.DefaultScore = score
+					definition.DefaultScore = redisSearchInfoValueFloat(def[subKey+1])
 				case "score_field":
-					definition.ScoreField = def[subKey+1].(string)
+					definition.ScoreField = redisSearchInfoValueString(def[subKey+1])
 				}
 			}
 			info.Definition = definition
 		case "fields":
-			fieldsRaw := res[i+1].([]interface{})
-			fields := make([]RedisSearchIndexInfoField, len(fieldsRaw))
-			for i, v := range fieldsRaw {
-				def := v.([]interface{})
-				field := RedisSearchIndexInfoField{Name: def[0].(string)}
-				def = def[1:]
-				for subKey, subValue := range def {
-					switch subValue {
-					case "type":
-						field.Type = def[subKey+1].(string)
-					case "WEIGHT":
-						weight, _ := strconv.ParseFloat(def[subKey+1].(string), 64)
-						field.Weight = weight
-					case "SORTABLE":
-						field.Sortable = true
-					case "NOSTEM":
-						field.NoStem = true
-					case "NOINDEX":
-						field.NoIndex = true
-					case "SEPARATOR":
-						field.TagSeparator = def[subKey+1].(string)
-					}
-				}
-				fields[i] = field
-			}
-			info.Fields = fields
+			info.Fields = parseRedisSearchInfoFields(res[i+1], false)
 		case "attributes":
-			fieldsRaw := res[i+1].([]interface{})
-			fields := make([]RedisSearchIndexInfoField, len(fieldsRaw))
-			for i, v := range fieldsRaw {
-				def := v.([]interface{})
-				field := RedisSearchIndexInfoField{}
-				for subKey, subValue := range def {
-					switch subValue {
-					case "identifier":
-						field.Name = def[subKey+1].(string)
-					case "type":
-						field.Type = def[subKey+1].(string)
-					case "WEIGHT":
-						weight, _ := strconv.ParseFloat(def[subKey+1].(string), 64)
-						field.Weight = weight
-					case "SORTABLE":
-						field.Sortable = true
-					case "NOSTEM":
-						field.NoStem = true
-					case "NOINDEX":
-						field.NoIndex = true
-					case "SEPARATOR":
-						field.TagSeparator = def[subKey+1].(string)
-					}
-				}
-				fields[i] = field
-			}
-			info.Fields = fields
+			info.Fields = parseRedisSearchInfoFields(res[i+1], true)
 		case "num_docs":
-			v, _ := strconv.ParseUint(res[i+1].(string), 10, 64)
-			info.NumDocs = v
+			info.NumDocs = redisSearchInfoValueUint(res[i+1])
 		case "max_doc_id":
-			v, _ := strconv.ParseUint(res[i+1].(string), 10, 64)
-			info.MaxDocID = v
+			info.MaxDocID = redisSearchInfoValueUint(res[i+1])
 		case "num_terms":
-			v, _ := strconv.ParseUint(res[i+1].(string), 10, 64)
-			info.NumTerms = v
+			info.NumTerms = redisSearchInfoValueUint(res[i+1])
 		case "num_records":
-			v, _ := strconv.ParseUint(res[i+1].(string), 10, 64)
-			info.NumRecords = v
+			info.NumRecords = redisSearchInfoValueUint(res[i+1])
 		case "inverted_sz_mb":
-			v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-			info.InvertedSzMB = v
+			info.InvertedSzMB = redisSearchInfoValueFloat(res[i+1])
 		case "total_inverted_index_blocks":
-			v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-			info.TotalInvertedIndexBlocks = v
+			info.TotalInvertedIndexBlocks = redisSearchInfoValueFloat(res[i+1])
 		case "offset_vectors_sz_mb":
-			v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-			info.OffsetVectorsSzMB = v
+			info.OffsetVectorsSzMB = redisSearchInfoValueFloat(res[i+1])
 		case "doc_table_size_mb":
-			v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-			info.DocTableSizeMB = v
+			info.DocTableSizeMB = redisSearchInfoValueFloat(res[i+1])
 		case "sortable_values_size_mb":
-			v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-			info.SortableValuesSizeMB = v
+			info.SortableValuesSizeMB = redisSearchInfoValueFloat(res[i+1])
 		case "key_table_size_mb":
-			v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-			info.KeyTableSizeMB = v
+			info.KeyTableSizeMB = redisSearchInfoValueFloat(res[i+1])
 		case "records_per_doc_avg":
-			if res[i+1] != "-nan" {
-				info.RecordsPerDocAvg, _ = strconv.Atoi(res[i+1].(string))
+			if !redisSearchInfoValueIsNaN(res[i+1]) {
+				info.RecordsPerDocAvg = redisSearchInfoValueInt(res[i+1])
 			}
 		case "bytes_per_record_avg":
-			if res[i+1] != "-nan" {
-				info.BytesPerRecordAvg, _ = strconv.Atoi(res[i+1].(string))
+			if !redisSearchInfoValueIsNaN(res[i+1]) {
+				info.BytesPerRecordAvg = redisSearchInfoValueInt(res[i+1])
 			}
 		case "offsets_per_term_avg":
-			if res[i+1] != "-nan" {
-				v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-				info.OffsetsPerTermAvg = v
+			if !redisSearchInfoValueIsNaN(res[i+1]) {
+				info.OffsetsPerTermAvg = redisSearchInfoValueFloat(res[i+1])
 			}
 		case "offset_bits_per_record_avg":
-			if res[i+1] != "-nan" {
-				v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-				info.OffsetBitsPerRecordAvg = v
+			if !redisSearchInfoValueIsNaN(res[i+1]) {
+				info.OffsetBitsPerRecordAvg = redisSearchInfoValueFloat(res[i+1])
 			}
 		case "hash_indexing_failures":
-			v, _ := strconv.ParseUint(res[i+1].(string), 10, 64)
-			info.HashIndexingFailures = v
+			info.HashIndexingFailures = redisSearchInfoValueUint(res[i+1])
 		case "indexing":
-			info.Indexing = res[i+1] == "1"
+			info.Indexing = redisSearchInfoValueString(res[i+1]) == "1"
 		case "percent_indexed":
-			v, _ := strconv.ParseFloat(res[i+1].(string), 64)
-			info.PercentIndexed = v
+			info.PercentIndexed = redisSearchInfoValueFloat(res[i+1])
 		case "stopwords_list":
-			v := res[i+1].([]interface{})
+			v := redisSearchInfoValueSlice(res[i+1])
 			info.StopWords = make([]string, len(v))
 			for i, v := range v {
-				info.StopWords[i] = v.(string)
+				info.StopWords[i] = redisSearchInfoValueString(v)
 			}
 		}
 	}

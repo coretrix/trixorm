@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"database/sql"
@@ -6,6 +6,7 @@ import (
 	"log"
 	"testing"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
 
 	"github.com/stretchr/testify/assert"
@@ -190,4 +191,17 @@ func TestDBErrors(t *testing.T) {
 	assert.PanicsWithError(t, "test error", func() {
 		row.RowsAffected()
 	})
+}
+
+func TestConvertToErrorKeepsDuplicateKeyIndex(t *testing.T) {
+	db := &DB{}
+	err := db.convertToError(&mysql.MySQLError{
+		Number:  1062,
+		Message: "Duplicate entry 'test' for key 'park_zones.FlowBirdID_FakeDelete'",
+	})
+
+	duplicatedKeyError, ok := err.(*DuplicatedKeyError)
+	assert.True(t, ok)
+	assert.Equal(t, "park_zones.FlowBirdID_FakeDelete", duplicatedKeyError.Index)
+	assert.Equal(t, "Duplicate entry 'test' for key 'FlowBirdID_FakeDelete'", duplicatedKeyError.Message)
 }

@@ -1,8 +1,11 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -18,12 +21,12 @@ type redisSearchEntity struct {
 	Weight            float64            `orm:"searchable"`
 	AgeNullable       *uint64            `orm:"searchable;sortable"`
 	BalanceNullable   *int64             `orm:"searchable;sortable"`
-	Enum              string             `orm:"enum=beeorm.TestEnum;required;searchable"`
-	EnumNullable      string             `orm:"enum=beeorm.TestEnum;searchable"`
+	Enum              string             `orm:"enum=trixorm.TestEnum;required;searchable"`
+	EnumNullable      string             `orm:"enum=trixorm.TestEnum;searchable"`
 	Name              string             `orm:"searchable"`
 	NameStem          string             `orm:"searchable;stem"`
-	Set               []string           `orm:"set=beeorm.TestEnum;required;searchable"`
-	SetNullable       []string           `orm:"set=beeorm.TestEnum;searchable"`
+	Set               []string           `orm:"set=trixorm.TestEnum;required;searchable"`
+	SetNullable       []string           `orm:"set=trixorm.TestEnum;searchable"`
 	Bool              bool               `orm:"searchable;sortable"`
 	BoolNullable      *bool              `orm:"searchable"`
 	WeightNullable    *float64           `orm:"searchable"`
@@ -89,7 +92,7 @@ func TestEntityRedisSearchIndexerNamespace(t *testing.T) {
 func testEntityRedisSearchIndexer(t *testing.T, redisNamespace, version string) {
 	var entity *redisSearchEntity
 	registry := &Registry{}
-	registry.RegisterEnumStruct("beeorm.TestEnum", TestEnum)
+	registry.RegisterEnumStruct("trixorm.TestEnum", TestEnum)
 	engine, def := prepareTables(t, registry, 5, redisNamespace, version, entity, &redisNoSearchEntity{})
 	defer def()
 	indexer := NewBackgroundConsumer(engine)
@@ -130,7 +133,7 @@ func testEntityRedisSearchIndexer(t *testing.T, redisNamespace, version string) 
 func TestEntityRedisSearchIndexerNoFakeDelete(t *testing.T) {
 	var entity *redisSearchEntityNoSearchableFakeDelete
 	registry := &Registry{}
-	registry.RegisterEnumStruct("beeorm.TestEnum", TestEnum)
+	registry.RegisterEnumStruct("trixorm.TestEnum", TestEnum)
 	engine, def := prepareTables(t, registry, 5, "", "2.0", entity)
 	defer def()
 	indexer := NewBackgroundConsumer(engine)
@@ -179,7 +182,7 @@ func TestEntityRedisSearchNamespace(t *testing.T) {
 func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 	var entity *redisSearchEntity
 	registry := &Registry{}
-	registry.RegisterEnumStruct("beeorm.TestEnum", TestEnum)
+	registry.RegisterEnumStruct("trixorm.TestEnum", TestEnum)
 	engine, def := prepareTables(t, registry, 5, redisNamespace, "2.0", entity, &redisNoSearchEntity{}, &redisNoSearchEntity{})
 
 	alters := engine.GetRedisSearchIndexAlters()
@@ -256,7 +259,7 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 
 	indices := engine.GetRedisSearch("search").ListIndices()
 	assert.Len(t, indices, 1)
-	assert.Equal(t, "beeorm.redisSearchEntity", indices[0])
+	assert.Equal(t, "trixorm.redisSearchEntity", indices[0])
 	info := engine.GetRedisSearch("search").Info(indices[0])
 	assert.False(t, info.Indexing)
 	assert.True(t, info.Options.NoFreqs)
@@ -267,7 +270,8 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 	if redisNamespace != "" {
 		prefix = redisNamespace + ":"
 	}
-	assert.Equal(t, []string{prefix + "7499e:"}, info.Definition.Prefixes)
+	entityHash := fmt.Sprintf("%x", sha256.Sum256([]byte(reflect.TypeOf(redisSearchEntity{}).String())))
+	assert.Equal(t, []string{prefix + entityHash[:5] + ":"}, info.Definition.Prefixes)
 	assert.Len(t, info.Fields, 25)
 	assert.Equal(t, "ID", info.Fields[0].Name)
 	assert.Equal(t, "NUMERIC", info.Fields[0].Type)
@@ -1094,7 +1098,7 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 		engine.RedisSearch(&[]*string{}, query, NewPager(1, 100))
 	})
 
-	assert.PanicsWithError(t, "entity beeorm.redisNoSearchEntity is not searchable", func() {
+	assert.PanicsWithError(t, "entity trixorm.redisNoSearchEntity is not searchable", func() {
 		query = &RedisSearchQuery{}
 		engine.RedisSearch(&[]*redisNoSearchEntity{}, query, NewPager(1, 100))
 	})
@@ -1352,10 +1356,10 @@ func TestEntityRedisAggregate(t *testing.T) {
 	query.Filter("@Age > 18")
 	query.Sort(RedisSearchAggregateSort{"@Age", false})
 	res, totalRows = engine.RedisSearchAggregate(entity, query, NewPager(1, 100))
-	assert.Equal(t, uint64(2), totalRows)
-	assert.Len(t, res, 2)
+	assert.Equal(t, uint64(1), totalRows)
+	assert.Len(t, res, 1)
 	assert.Equal(t, "39", res[0]["Age"])
-	assert.Equal(t, "", res[1]["Age"])
+	assert.Equal(t, "2", res[0]["sizes"])
 
 	q := &RedisSearchQuery{}
 	q.Sort("ID", true)

@@ -1,6 +1,6 @@
 module github.com/coretrix/trixorm
 
-go 1.17
+go 1.23.1
 
 require (
 	github.com/bsm/redislock v0.7.2

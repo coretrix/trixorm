@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"database/sql"
@@ -272,7 +272,7 @@ func getEntityTypeForSlice(registry *validatedRegistry, sliceType reflect.Type, 
 	if name[0] == 91 {
 		name = name[3:]
 	} else if checkIsSlice {
-		panic(fmt.Errorf("interface %s is no slice of beeorm.Entity", sliceType.String()))
+		panic(fmt.Errorf("interface %s is no slice of trixorm.Entity", sliceType.String()))
 	}
 	e, has := registry.entities[name]
 	return e, has, name

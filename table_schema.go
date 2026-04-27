@@ -1,4 +1,4 @@
-package beeorm
+package trixorm
 
 import (
 	"crypto/sha256"
@@ -726,7 +726,7 @@ func (tableSchema *tableSchema) buildTableFields(t reflect.Type, registry *Regis
 		case "*float32",
 			"*float64":
 			tableSchema.buildFloatPointerField(attributes)
-		case "*beeorm.CachedQuery":
+		case "*trixorm.CachedQuery":
 			continue
 		case "*time.Time":
 			tableSchema.buildTimePointerField(attributes)
@@ -1272,7 +1272,7 @@ func extractTag(registry *Registry, field reflect.StructField) map[string]map[st
 		return map[string]map[string]string{field.Name: attributes}
 	} else if field.Type.Kind().String() == "struct" {
 		t := field.Type.String()
-		if t != "beeorm.ORM" && t != "time.Time" {
+		if t != "trixorm.ORM" && t != "time.Time" {
 			prefix := ""
 			if !field.Anonymous {
 				prefix = field.Name

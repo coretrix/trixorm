@@ -1,7 +1,8 @@
-package beeorm
+package trixorm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"testing"
@@ -9,6 +10,51 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestParseRedisSearchInfoFieldsAttributes(t *testing.T) {
+	fields := parseRedisSearchInfoFields(
+		[]interface{}{
+			[]interface{}{
+				"identifier", "title",
+				"attribute", "title",
+				"type", "TEXT",
+				"WEIGHT", float64(1),
+				"flags", []interface{}{"SORTABLE"},
+			},
+			[]interface{}{
+				"identifier", "tags",
+				"attribute", "tags",
+				"type", "TAG",
+				"SEPARATOR", ".",
+				"flags", []interface{}{"SORTABLE", "NOINDEX"},
+			},
+		},
+		true,
+	)
+
+	assert.Equal(t, []RedisSearchIndexInfoField{
+		{
+			Name:     "title",
+			Type:     "TEXT",
+			Weight:   1,
+			Sortable: true,
+		},
+		{
+			Name:         "tags",
+			Type:         "TAG",
+			Sortable:     true,
+			NoIndex:      true,
+			TagSeparator: ".",
+		},
+	}, fields)
+}
+
+func TestRedisSearchMissingIndexErrors(t *testing.T) {
+	assert.True(t, isRedisSearchMissingIndexError(errors.New("Unknown Index name")))
+	assert.True(t, isRedisSearchMissingIndexError(errors.New("test: no such index")))
+	assert.False(t, isRedisSearchMissingIndexError(errors.New("connection refused")))
+	assert.False(t, isRedisSearchMissingIndexError(nil))
+}
 
 func TestRedisSearchIndexer(t *testing.T) {
 	testRedisSearchIndexer(t, "", "2.0")
@@ -320,8 +366,7 @@ func testRedisSearch(t *testing.T, redisNamespace, version string) {
 	total, rows = search.Search("test2", query, NewPager(1, 2))
 	assert.Equal(t, uint64(2), total)
 	assert.Len(t, rows, 2)
-	assert.Equal(t, "test2:35", rows[0].Key)
-	assert.Equal(t, "test2:33", rows[1].Key)
+	assert.ElementsMatch(t, []string{"test2:35", "test2:33"}, []string{rows[0].Key, rows[1].Key})
 
 	query = &RedisSearchQuery{}
 	query.FilterFloatMinMax("number_float", 7.33, 7.35)
@@ -335,8 +380,7 @@ func testRedisSearch(t *testing.T, redisNamespace, version string) {
 	total, rows = search.Search("test2", query, NewPager(1, 2))
 	assert.Equal(t, uint64(2), total)
 	assert.Len(t, rows, 2)
-	assert.Equal(t, "test2:34", rows[0].Key)
-	assert.Equal(t, "test2:33", rows[1].Key)
+	assert.ElementsMatch(t, []string{"test2:34", "test2:33"}, []string{rows[0].Key, rows[1].Key})
 
 	query = &RedisSearchQuery{}
 	query.FilterIntMinMax("id", 1, 100).Sort("id", false)

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	orm "github.com/latolukasz/beeorm"
+	orm "github.com/coretrix/trixorm"
 )
 
 type RedisStreamStatistics struct {

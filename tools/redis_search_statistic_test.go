@@ -5,14 +5,16 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 
-	"github.com/latolukasz/beeorm"
+	"github.com/coretrix/trixorm"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRedisSearchStatistics(t *testing.T) {
-	registry := &beeorm.Registry{}
+	registry := &trixorm.Registry{}
 	registry.RegisterRedis("localhost:6382", "", 0)
-	registry.RegisterRedisSearchIndex(&beeorm.RedisSearchIndex{Name: "test", RedisPool: "default", Prefixes: []string{"test:"}})
+	index := trixorm.NewRedisSearchIndex("test", "default", []string{"test:"})
+	index.AddTextField("title", 1, false, false, false)
+	registry.RegisterRedisSearchIndex(index)
 	validatedRegistry, def, err := registry.Validate()
 	assert.NoError(t, err)
 	defer def()
