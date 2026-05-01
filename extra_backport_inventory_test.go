@@ -52,9 +52,16 @@ type extraInventoryUUIDLazyEntity struct {
 }
 
 func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
-	t.Run("redis lock and rate limit APIs are still the current public surface", func(t *testing.T) {
+	t.Run("redis lock and rate limit APIs match current TrixORM surface", func(t *testing.T) {
 		_, hasRateLimit := reflect.TypeOf(&RedisCache{}).MethodByName("RateLimit")
 		require.True(t, hasRateLimit)
+		rateLimit, _ := reflect.TypeOf(&RedisCache{}).MethodByName("RateLimit")
+		assert.Equal(t, 4, rateLimit.Type.NumIn())
+		assert.Equal(t, reflect.TypeOf(""), rateLimit.Type.In(1))
+		assert.Equal(t, reflect.TypeOf(time.Duration(0)), rateLimit.Type.In(2))
+		assert.Equal(t, reflect.TypeOf(0), rateLimit.Type.In(3))
+		assert.Equal(t, 1, rateLimit.Type.NumOut())
+		assert.Equal(t, reflect.TypeOf(false), rateLimit.Type.Out(0))
 
 		obtain, hasObtain := reflect.TypeOf(&Locker{}).MethodByName("Obtain")
 		require.True(t, hasObtain)
@@ -64,10 +71,19 @@ func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 		assert.Equal(t, reflect.TypeOf(time.Duration(0)), obtain.Type.In(3))
 		assert.Equal(t, 2, obtain.Type.NumOut())
 
+		obtainContext, hasObtainContext := reflect.TypeOf(&Locker{}).MethodByName("ObtainContext")
+		require.True(t, hasObtainContext)
+		assert.Equal(t, 5, obtainContext.Type.NumIn())
+		assert.Equal(t, reflect.TypeOf((*context.Context)(nil)).Elem(), obtainContext.Type.In(1))
+		assert.Equal(t, reflect.TypeOf(""), obtainContext.Type.In(2))
+		assert.Equal(t, reflect.TypeOf(time.Duration(0)), obtainContext.Type.In(3))
+		assert.Equal(t, reflect.TypeOf(time.Duration(0)), obtainContext.Type.In(4))
+		assert.Equal(t, 2, obtainContext.Type.NumOut())
+
 		refresh, hasRefresh := reflect.TypeOf(&Lock{}).MethodByName("Refresh")
 		require.True(t, hasRefresh)
 		assert.Equal(t, 2, refresh.Type.NumIn())
-		assert.Equal(t, reflect.TypeOf(time.Duration(0)), refresh.Type.In(1))
+		assert.Equal(t, reflect.TypeOf((*context.Context)(nil)).Elem(), refresh.Type.In(1))
 		assert.Equal(t, 1, refresh.Type.NumOut())
 	})
 
@@ -364,19 +380,19 @@ func TestExtraBackportInventoryLockWaitRefreshAndRelease(t *testing.T) {
 	redisCache.FlushDB()
 	locker := redisCache.GetLocker()
 
-	lock, obtained := locker.Obtain("shared", time.Second, 0)
+	lock, obtained := locker.ObtainContext(context.Background(), "shared", time.Second, 0)
 	require.True(t, obtained)
 	require.NotNil(t, lock)
 	defer lock.Release()
 
-	contender, contenderObtained := locker.Obtain("shared", time.Second, 20*time.Millisecond)
+	contender, contenderObtained := locker.ObtainContext(context.Background(), "shared", time.Second, 20*time.Millisecond)
 	assert.False(t, contenderObtained)
 	assert.Nil(t, contender)
 	assert.Greater(t, lock.TTL(), time.Duration(0))
-	assert.True(t, lock.Refresh(2*time.Second))
+	assert.True(t, lock.Refresh(context.Background()))
 
 	lock.Release()
-	contender, contenderObtained = locker.Obtain("shared", time.Second, 200*time.Millisecond)
+	contender, contenderObtained = locker.ObtainContext(context.Background(), "shared", time.Second, 200*time.Millisecond)
 	require.True(t, contenderObtained)
 	contender.Release()
 }

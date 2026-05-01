@@ -2,7 +2,6 @@ package trixorm
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -170,14 +169,6 @@ func TestExtraRedisCacheScenarios(t *testing.T) {
 		assert.Equal(t, int64(0), redisCache.Exists("pipe", "pipe-hash"))
 	})
 
-	t.Run("rate limit rejects after burst", func(t *testing.T) {
-		key := fmt.Sprintf("rate-%d", time.Now().UnixNano())
-
-		assert.True(t, redisCache.RateLimit(key, time.Minute, 2))
-		assert.True(t, redisCache.RateLimit(key, time.Minute, 2))
-		assert.False(t, redisCache.RateLimit(key, time.Minute, 2))
-	})
-
 	t.Run("stream operations create group read acknowledge and delete", func(t *testing.T) {
 		redisCache.Del("extra-stream-case")
 		result, existed := redisCache.XGroupCreateMkStream("extra-stream-case", "extra-group-case", "0")
@@ -204,4 +195,42 @@ func TestExtraRedisCacheScenarios(t *testing.T) {
 		assert.Equal(t, int64(1), redisCache.XDel("extra-stream-case", id))
 		assert.Equal(t, int64(0), redisCache.XLen("extra-stream-case"))
 	})
+}
+
+func TestRedisRateLimitRealLifeLoginAttempts(t *testing.T) {
+	registry := &Registry{}
+	registry.RegisterRedis("localhost:6382", "rate_limit_life", 15)
+	registry.RegisterRedis("localhost:6382", "rate_limit_life_other", 15, "other")
+	validatedRegistry, def, err := registry.Validate()
+	require.NoError(t, err)
+	defer def()
+
+	engine := validatedRegistry.CreateEngine()
+	redisCache := engine.GetRedis()
+	otherRedisCache := engine.GetRedis("other")
+	redisCache.FlushDB()
+	otherRedisCache.FlushDB()
+	logger := &testLogHandler{}
+	engine.RegisterQueryLogger(logger, false, true, false)
+
+	key := "login:customer:42"
+	period := 300 * time.Millisecond
+	limit := 3
+
+	assert.True(t, redisCache.RateLimit(key, period, limit))
+	assert.True(t, redisCache.RateLimit(key, period, limit))
+	assert.True(t, redisCache.RateLimit(key, period, limit))
+	assert.False(t, redisCache.RateLimit(key, period, limit))
+
+	require.Len(t, logger.Logs, 4)
+	assert.Equal(t, "RATE", logger.Logs[0]["operation"])
+	assert.Equal(t, "RATE rate_limit_life:"+key+" "+period.String(), logger.Logs[0]["query"])
+
+	namespaceKey := "login:customer:namespace"
+	assert.True(t, redisCache.RateLimit(namespaceKey, time.Minute, 1))
+	assert.False(t, redisCache.RateLimit(namespaceKey, time.Minute, 1))
+	assert.True(t, otherRedisCache.RateLimit(namespaceKey, time.Minute, 1))
+
+	time.Sleep(period + 100*time.Millisecond)
+	assert.True(t, redisCache.RateLimit(key, period, limit))
 }
