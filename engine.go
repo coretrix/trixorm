@@ -31,6 +31,7 @@ type Engine struct {
 func (e *Engine) Clone() *Engine {
 	return &Engine{
 		registry:               e.registry,
+		queryTimeLimit:         e.queryTimeLimit,
 		logMetaData:            e.logMetaData,
 		hasRequestCache:        e.hasRequestCache,
 		queryLoggersDB:         e.queryLoggersDB,

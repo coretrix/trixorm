@@ -255,6 +255,7 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 	list[2].Ref = list[31]
 	list[3].Ref = list[31]
 	list[4].Ref = list[31]
+	flusher.Track(list[0], list[1], list[2], list[3], list[4])
 	flusher.Flush()
 
 	indices := engine.GetRedisSearch("search").ListIndices()

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/shamaton/msgpack"
 
 	jsoniter "github.com/json-iterator/go"
@@ -45,6 +46,7 @@ type BackgroundConsumer struct {
 	consumer             *eventsConsumer
 	lazyFlushModulo      uint64
 	lazyErrorLock        sync.Mutex
+	lazyErrorResolvers   []LazyFlushQueryErrorResolver
 }
 
 func NewBackgroundConsumer(engine *Engine) *BackgroundConsumer {
@@ -58,6 +60,12 @@ func NewBackgroundConsumer(engine *Engine) *BackgroundConsumer {
 
 func (r *BackgroundConsumer) SetLazyFlushWorkers(workers int) {
 	r.lazyFlushModulo = uint64(workers)
+}
+
+type LazyFlushQueryErrorResolver func(engine *Engine, db *DB, sql string, queryError *mysql.MySQLError) error
+
+func (r *BackgroundConsumer) RegisterLazyFlushQueryErrorResolver(resolver LazyFlushQueryErrorResolver) {
+	r.lazyErrorResolvers = append(r.lazyErrorResolvers, resolver)
 }
 
 func (r *BackgroundConsumer) GetLazyFlushEventsSample(count int64) []string {
@@ -85,7 +93,7 @@ func (r *BackgroundConsumer) GetLazyFlushEventsSample(count int64) []string {
 		if !ok || len(queryDetails) < 2 {
 			continue
 		}
-		sample = append(sample, queryDetails[1].(string))
+		sample = append(sample, entry.ID+"|"+queryDetails[1].(string))
 	}
 	return sample
 }
@@ -203,7 +211,10 @@ func (r *BackgroundConsumer) Digest(ctx context.Context) bool {
 								}
 							}()
 							if len(groupEvents[dbCode][key]) == 1 {
-								r.engine.GetMysql(dbCode).Exec(updateSQL)
+								_, err := r.engine.GetMysql(dbCode).exec(updateSQL)
+								if err != nil && !r.resolveLazyFlushQueryError(r.engine.GetMysql(dbCode), updateSQL, err) {
+									panic(err)
+								}
 							} else {
 								deadlock := false
 								func() {
@@ -220,8 +231,15 @@ func (r *BackgroundConsumer) Digest(ctx context.Context) bool {
 									db := r.engine.Clone().GetMysql(dbCode)
 									db.Begin()
 									defer db.Rollback()
-									db.Exec(updateSQL)
-									db.Commit()
+									_, err := db.exec(updateSQL)
+									if err != nil {
+										db.Rollback()
+										if !r.resolveLazyFlushQueryError(db, updateSQL, err) {
+											panic(err)
+										}
+									} else {
+										db.Commit()
+									}
 								}()
 								if deadlock {
 									time.Sleep(time.Millisecond * 30)
@@ -230,8 +248,15 @@ func (r *BackgroundConsumer) Digest(ctx context.Context) bool {
 										db := r.engine.Clone().GetMysql(dbCode)
 										db.Begin()
 										defer db.Rollback()
-										db.Exec(updateSQL)
-										db.Commit()
+										_, err := db.exec(updateSQL)
+										if err != nil {
+											db.Rollback()
+											if !r.resolveLazyFlushQueryError(db, updateSQL, err) {
+												panic(err)
+											}
+										} else {
+											db.Commit()
+										}
 									}()
 								}
 							}
@@ -295,23 +320,33 @@ func (r *BackgroundConsumer) handleLog(values map[string][]*LogQueueValue) {
 }
 
 func (r *BackgroundConsumer) handleLazy(event Event, data map[string]interface{}) {
-	ids := r.handleQueries(r.engine, data)
+	ids, err := r.handleQueries(r.engine, data)
+	if err != nil {
+		panic(err)
+	}
 	r.handleCache(data, ids)
 	event.Ack()
 }
 
-func (r *BackgroundConsumer) handleQueries(engine *Engine, validMap map[string]interface{}) []uint64 {
+func (r *BackgroundConsumer) handleQueries(engine *Engine, validMap map[string]interface{}) ([]uint64, error) {
 	queries, has := validMap["q"]
 	var ids []uint64
 	if has {
 		validQueries := queries.([]interface{})
 		ids = make([]uint64, len(validQueries))
+	MAIN:
 		for i, query := range validQueries {
 			validInsert := query.([]interface{})
 			code := validInsert[0].(string)
 			db := engine.GetMysql(code)
 			sql := validInsert[1].(string)
-			res := db.Exec(sql)
+			res, err := db.exec(sql)
+			if err != nil {
+				if r.resolveLazyFlushQueryError(db, sql, err) {
+					continue MAIN
+				}
+				return nil, err
+			}
 			operation := validMap["o"]
 			isInsert := operation == "i"
 			if isInsert {
@@ -336,7 +371,23 @@ func (r *BackgroundConsumer) handleQueries(engine *Engine, validMap map[string]i
 			}
 		}
 	}
-	return ids
+	return ids, nil
+}
+
+func (r *BackgroundConsumer) resolveLazyFlushQueryError(db *DB, sql string, err error) bool {
+	if len(r.lazyErrorResolvers) == 0 {
+		return false
+	}
+	queryError, ok := err.(*mysql.MySQLError)
+	if !ok {
+		return false
+	}
+	for _, resolver := range r.lazyErrorResolvers {
+		if resolver(r.engine, db, sql, queryError) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *BackgroundConsumer) convertMap(value map[interface{}]interface{}) map[string]interface{} {

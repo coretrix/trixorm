@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,6 +188,18 @@ func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 		assert.Equal(t, reflect.Func, reflect.ValueOf(SetUUIDServerID).Kind())
 	})
 
+	t.Run("category three helper APIs are now present", func(t *testing.T) {
+		_, hasIsToDelete := reflect.TypeOf(&ORM{}).MethodByName("IsToDelete")
+		assert.True(t, hasIsToDelete)
+
+		_, hasLazyResolver := reflect.TypeOf(&BackgroundConsumer{}).MethodByName("RegisterLazyFlushQueryErrorResolver")
+		assert.True(t, hasLazyResolver)
+
+		flusherType := reflect.TypeOf((*Flusher)(nil)).Elem()
+		_, hasCancelDelete := flusherType.MethodByName("CancelDelete")
+		assert.True(t, hasCancelDelete)
+	})
+
 	t.Run("later helper APIs are still absent from the current surface", func(t *testing.T) {
 		_, hasPagerString := reflect.TypeOf(&Pager{}).MethodByName("String")
 		assert.False(t, hasPagerString)
@@ -194,15 +207,8 @@ func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 		_, hasSetMemoryOnly := reflect.TypeOf(&ORM{}).MethodByName("SetMemoryOnly")
 		assert.False(t, hasSetMemoryOnly)
 
-		_, hasIsToDelete := reflect.TypeOf(&ORM{}).MethodByName("IsToDelete")
-		assert.False(t, hasIsToDelete)
-
 		_, hasSetBlockTime := reflect.TypeOf(&BackgroundConsumer{}).MethodByName("SetBlockTime")
 		assert.False(t, hasSetBlockTime)
-
-		flusherType := reflect.TypeOf((*Flusher)(nil)).Elem()
-		_, hasCancelDelete := flusherType.MethodByName("CancelDelete")
-		assert.False(t, hasCancelDelete)
 	})
 }
 
@@ -395,6 +401,15 @@ func TestExtraBackportInventoryCachedSearchLazyDeleteNoNilRows(t *testing.T) {
 	require.Len(t, found, 3)
 
 	engine.DeleteLazy(rows[1])
+	found = nil
+	total = engine.CachedSearch(&found, "ByAge", nil, 44)
+	require.Equal(t, 2, total)
+	require.Len(t, found, 2)
+	for _, row := range found {
+		require.NotNil(t, row)
+	}
+	assert.ElementsMatch(t, []string{"alpha", "charlie"}, []string{found[0].Name, found[1].Name})
+
 	receiver := NewBackgroundConsumer(engine)
 	receiver.DisableLoop()
 	receiver.blockTime = time.Millisecond
@@ -441,6 +456,137 @@ func TestExtraBackportInventoryCachedSearchReferenceLazyDelete(t *testing.T) {
 	totalRows = engine.CachedSearch(&rows, "IndexReference", nil, reference.ID)
 	assert.Equal(t, 0, totalRows)
 	assert.Empty(t, rows)
+}
+
+func TestExtraBackportInventoryLazyFlushTransactionAfterCommit(t *testing.T) {
+	var entity *lazyReceiverEntity
+	var reference *lazyReceiverReference
+	registry := NewRegistry()
+	registry.RegisterEnum("trixorm.TestEnum", []string{"a", "b", "c"})
+	engine, def := prepareTables(t, registry, 5, "extra_inventory_lazy_tx", "2.0", entity, reference)
+	defer def()
+	engine.GetRedis().FlushDB()
+
+	row := &lazyReceiverEntity{Name: "before", Age: 1}
+	engine.Flush(row)
+	loaded := &lazyReceiverEntity{}
+	require.True(t, engine.LoadByID(uint64(row.ID), loaded))
+	loaded.Name = "after"
+
+	receiver := NewBackgroundConsumer(engine)
+	receiver.DisableLoop()
+	receiver.blockTime = time.Millisecond
+
+	engine.GetMysql().Begin()
+	engine.FlushLazy(loaded)
+	engine.GetMysql().Commit()
+
+	sample := receiver.GetLazyFlushEventsSample(10)
+	require.Len(t, sample, 1)
+	parts := strings.SplitN(sample[0], "|", 2)
+	require.Len(t, parts, 2)
+	assert.NotEmpty(t, parts[0])
+	assert.Contains(t, parts[1], "UPDATE `lazyReceiverEntity`")
+
+	receiver.Digest(context.Background())
+	engine.GetLocalCache().Clear()
+	engine.GetRedis().FlushDB()
+
+	reloaded := &lazyReceiverEntity{}
+	require.True(t, engine.LoadByID(uint64(row.ID), reloaded))
+	assert.Equal(t, "after", reloaded.Name)
+}
+
+func TestExtraBackportInventoryCancelDelete(t *testing.T) {
+	var entity *extraInventoryManualIDEntity
+	engine, def := prepareTables(t, &Registry{}, 8, "", "2.0", entity)
+	defer def()
+
+	cancelled := &extraInventoryManualIDEntity{Name: "cancelled"}
+	engine.Flush(cancelled)
+
+	flusher := engine.NewFlusher().Delete(cancelled)
+	assert.True(t, cancelled.IsToDelete())
+
+	flusher.CancelDelete(cancelled)
+	assert.False(t, cancelled.IsToDelete())
+
+	flusher.Flush()
+
+	loadedCancelled := &extraInventoryManualIDEntity{}
+	found := engine.LoadByID(uint64(cancelled.ID), loadedCancelled)
+	assert.True(t, found)
+	assert.Equal(t, "cancelled", loadedCancelled.Name)
+}
+
+func TestExtraBackportInventoryLazyFlushUpdateErrorResolver(t *testing.T) {
+	prepare := func(t *testing.T, namespace string) (*Engine, func()) {
+		t.Helper()
+		var entity *lazyReceiverEntity
+		var reference *lazyReceiverReference
+		registry := NewRegistry()
+		registry.RegisterEnum("trixorm.TestEnum", []string{"a", "b", "c"})
+		return prepareTables(t, registry, 5, namespace, "2.0", entity, reference)
+	}
+	seedDuplicateLazyUpdate := func(t *testing.T, engine *Engine) *lazyReceiverEntity {
+		t.Helper()
+		taken := &lazyReceiverEntity{Name: "taken", Age: 10}
+		engine.Flush(taken)
+		row := &lazyReceiverEntity{Name: "candidate", Age: 11}
+		engine.Flush(row)
+		loaded := &lazyReceiverEntity{}
+		require.True(t, engine.LoadByID(uint64(row.ID), loaded))
+		loaded.Name = "taken"
+		engine.FlushLazy(loaded)
+		return row
+	}
+
+	t.Run("unresolved lazy update errors still panic", func(t *testing.T) {
+		engine, def := prepare(t, "extra_inventory_lazy_error_panic")
+		defer def()
+		seedDuplicateLazyUpdate(t, engine)
+		receiver := NewBackgroundConsumer(engine)
+		receiver.DisableLoop()
+		receiver.blockTime = time.Millisecond
+		var panicValue interface{}
+		func() {
+			defer func() {
+				panicValue = recover()
+			}()
+			receiver.Digest(context.Background())
+		}()
+		require.NotNil(t, panicValue)
+		panicError, ok := panicValue.(error)
+		require.True(t, ok)
+		assert.Contains(t, panicError.Error(), "Duplicate entry")
+	})
+
+	t.Run("resolver can accept a lazy update mysql error", func(t *testing.T) {
+		engine, def := prepare(t, "extra_inventory_lazy_error_resolved")
+		defer def()
+		row := seedDuplicateLazyUpdate(t, engine)
+		receiver := NewBackgroundConsumer(engine)
+		receiver.DisableLoop()
+		receiver.blockTime = time.Millisecond
+		called := false
+		receiver.RegisterLazyFlushQueryErrorResolver(func(engine *Engine, db *DB, sql string, queryError *mysql.MySQLError) error {
+			called = true
+			assert.NotNil(t, engine)
+			assert.Equal(t, "default", db.GetPoolConfig().GetCode())
+			assert.Contains(t, sql, "UPDATE `lazyReceiverEntity`")
+			assert.Equal(t, uint16(1062), queryError.Number)
+			return nil
+		})
+		assert.NotPanics(t, func() {
+			receiver.Digest(context.Background())
+		})
+		assert.True(t, called)
+
+		engine.GetLocalCache().Clear()
+		loaded := &lazyReceiverEntity{}
+		require.True(t, engine.LoadByID(uint64(row.ID), loaded))
+		assert.Equal(t, "candidate", loaded.Name)
+	})
 }
 
 func TestExtraBackportInventoryUUIDLazyFlushRoundTrip(t *testing.T) {

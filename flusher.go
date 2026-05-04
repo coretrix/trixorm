@@ -37,6 +37,7 @@ type Flusher interface {
 	Clear()
 	Delete(entity ...Entity) Flusher
 	ForceDelete(entity ...Entity) Flusher
+	CancelDelete(entity ...Entity) Flusher
 }
 
 type flusher struct {
@@ -91,6 +92,15 @@ func (f *flusher) ForceDelete(entity ...Entity) Flusher {
 	return f
 }
 
+func (f *flusher) CancelDelete(entity ...Entity) Flusher {
+	for _, e := range entity {
+		orm := e.getORM()
+		orm.fakeDelete = false
+		orm.delete = false
+	}
+	return f
+}
+
 func (f *flusher) Flush() {
 	f.flushTrackedEntities(false, false)
 }
@@ -121,7 +131,10 @@ func (f *flusher) FlushLazy() {
 func (f *flusher) Clear() {
 	f.trackedEntities = nil
 	f.trackedEntitiesCounter = 0
-	f.clear()
+	f.updateSQLs = nil
+	f.deleteBinds = nil
+	f.localCacheDeletes = nil
+	f.localCacheSets = nil
 }
 
 func (f *flusher) flushTrackedEntities(lazy bool, transaction bool) {
@@ -172,7 +185,10 @@ func (f *flusher) flushTrackedEntities(lazy bool, transaction bool) {
 		}
 	}
 	executed = true
-	f.clear()
+	f.updateSQLs = nil
+	f.deleteBinds = nil
+	f.localCacheDeletes = nil
+	f.localCacheSets = nil
 }
 
 func (f *flusher) flushWithCheck(transaction bool) error {
@@ -312,6 +328,9 @@ func (f *flusher) updateRedisCache(root bool, lazy bool, transaction bool) {
 				}
 				deletesRedisCache[cacheCode] = commands.deletes
 			}
+		}
+		if transaction {
+			f.engine.afterCommitRedisFlusher = f.getRedisFlusher()
 		}
 	} else if transaction {
 		f.engine.afterCommitRedisFlusher = f.getRedisFlusher()
@@ -984,11 +1003,4 @@ func (f *flusher) fillLazyQuery(dbCode string, sql string, insert bool, id uint6
 	if len(dirtyData) > 0 {
 		lazyMap["d"] = dirtyData
 	}
-}
-
-func (f *flusher) clear() {
-	f.updateSQLs = nil
-	f.deleteBinds = nil
-	f.localCacheDeletes = nil
-	f.localCacheSets = nil
 }
