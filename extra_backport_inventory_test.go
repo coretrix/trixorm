@@ -94,6 +94,13 @@ type extraInventoryMissingRefChildEntity struct {
 	Parent *extraInventoryMissingRefParentEntity
 }
 
+type extraInventoryFakeDeleteEntity struct {
+	ORM
+	ID         uint
+	Name       string `orm:"index=Name"`
+	FakeDelete bool
+}
+
 func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 	t.Run("redis lock and rate limit APIs match current TrixORM surface", func(t *testing.T) {
 		_, hasRateLimit := reflect.TypeOf(&RedisCache{}).MethodByName("RateLimit")
@@ -175,8 +182,10 @@ func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 			assert.True(t, hasMethod, method)
 		}
 
-		_, hasWhereShowFakeDeleted := reflect.TypeOf(&Where{}).MethodByName("ShowFakeDeleted")
-		assert.False(t, hasWhereShowFakeDeleted)
+		showFakeDeleted, hasWhereShowFakeDeleted := reflect.TypeOf(&Where{}).MethodByName("ShowFakeDeleted")
+		require.True(t, hasWhereShowFakeDeleted)
+		assert.Equal(t, 1, showFakeDeleted.Type.NumOut())
+		assert.Equal(t, reflect.TypeOf(&Where{}), showFakeDeleted.Type.Out(0))
 	})
 
 	t.Run("category one helper APIs are now present", func(t *testing.T) {
@@ -225,6 +234,44 @@ func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 		_, hasSetMemoryOnly := reflect.TypeOf(&ORM{}).MethodByName("SetMemoryOnly")
 		assert.False(t, hasSetMemoryOnly)
 	})
+}
+
+func TestExtraBackportInventoryShowFakeDeletedWhereCompatibility(t *testing.T) {
+	var entity *extraInventoryFakeDeleteEntity
+	engine, def := prepareTables(t, &Registry{}, 8, "", "2.0", entity)
+	defer def()
+
+	visible := &extraInventoryFakeDeleteEntity{Name: "visible"}
+	deleted := &extraInventoryFakeDeleteEntity{Name: "deleted"}
+	engine.FlushMany(visible, deleted)
+	engine.Delete(deleted)
+
+	var rows []*extraInventoryFakeDeleteEntity
+	engine.Search(NewWhere("`ID` > 0 ORDER BY `ID`"), nil, &rows)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "visible", rows[0].Name)
+
+	engine.Search(NewWhere("`ID` > 0 ORDER BY `ID`").ShowFakeDeleted(), nil, &rows)
+	require.Len(t, rows, 2)
+	assert.Equal(t, []string{"visible", "deleted"}, []string{rows[0].Name, rows[1].Name})
+
+	engine.SearchWithFakeDeleted(NewWhere("`ID` > 0 ORDER BY `ID`"), nil, &rows)
+	require.Len(t, rows, 2)
+	assert.Equal(t, []string{"visible", "deleted"}, []string{rows[0].Name, rows[1].Name})
+
+	ids := engine.SearchIDs(NewWhere("`ID` > 0 ORDER BY `ID`").ShowFakeDeleted(), nil, &extraInventoryFakeDeleteEntity{})
+	assert.Equal(t, []uint64{uint64(visible.ID), uint64(deleted.ID)}, ids)
+
+	rows = nil
+	total := engine.SearchWithCount(NewWhere("`ID` > 0 ORDER BY `ID`").ShowFakeDeleted(), NewPager(1, 1), &rows)
+	assert.Equal(t, 2, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "visible", rows[0].Name)
+
+	one := &extraInventoryFakeDeleteEntity{}
+	assert.False(t, engine.SearchOne(NewWhere("`Name` = ?", "deleted"), one))
+	assert.True(t, engine.SearchOne(NewWhere("`Name` = ?", "deleted").ShowFakeDeleted(), one))
+	assert.Equal(t, deleted.ID, one.ID)
 }
 
 func TestExtraBackportInventoryInsertColumnBackticks(t *testing.T) {

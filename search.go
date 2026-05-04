@@ -129,7 +129,7 @@ func searchRow(serializer *serializer, skipFakeDelete bool, engine *Engine, wher
 	orm := initIfNeeded(engine.registry, entity)
 	schema := orm.tableSchema
 	whereQuery := where.String()
-	if skipFakeDelete && schema.hasFakeDelete {
+	if skipFakeDelete && !where.showFakeDeleted && schema.hasFakeDelete {
 		whereQuery = "`FakeDelete` = 0 AND " + whereQuery
 	}
 	/* #nosec */
@@ -163,7 +163,7 @@ func search(serializer *serializer, skipFakeDelete bool, engine *Engine, where *
 	}
 	schema := getTableSchema(engine.registry, entityType)
 	whereQuery := where.String()
-	if skipFakeDelete && schema.hasFakeDelete {
+	if skipFakeDelete && !where.showFakeDeleted && schema.hasFakeDelete {
 		whereQuery = "`FakeDelete` = 0 AND " + whereQuery
 		where = NewWhere(whereQuery, where.parameters)
 	}
@@ -206,7 +206,7 @@ func searchIDs(skipFakeDelete bool, engine *Engine, where *Where, pager *Pager, 
 	}
 	schema := getTableSchema(engine.registry, entityType)
 	whereQuery := where.String()
-	if skipFakeDelete && schema.hasFakeDelete {
+	if skipFakeDelete && !where.showFakeDeleted && schema.hasFakeDelete {
 		/* #nosec */
 		whereQuery = "`FakeDelete` = 0 AND " + whereQuery
 		where = NewWhere(whereQuery, where.parameters)
