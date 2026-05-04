@@ -144,13 +144,20 @@ func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 		}
 	})
 
-	t.Run("registry validate still returns cleanup and sentinel options are not exposed", func(t *testing.T) {
+	t.Run("registry validate still returns cleanup and sentinel options are exposed", func(t *testing.T) {
 		validate, hasValidate := reflect.TypeOf(&Registry{}).MethodByName("Validate")
 		require.True(t, hasValidate)
 		assert.Equal(t, 3, validate.Type.NumOut())
 
-		_, hasSentinelOptions := reflect.TypeOf(&Registry{}).MethodByName("RegisterRedisSentinelWithOptions")
-		assert.False(t, hasSentinelOptions)
+		sentinelOptionsMethod, hasSentinelOptions := reflect.TypeOf(&Registry{}).MethodByName("RegisterRedisSentinelWithOptions")
+		require.True(t, hasSentinelOptions)
+		assert.True(t, sentinelOptionsMethod.Type.IsVariadic())
+		assert.Equal(t, 6, sentinelOptionsMethod.Type.NumIn())
+		assert.Equal(t, "string", sentinelOptionsMethod.Type.In(1).String())
+		assert.Equal(t, "redis.FailoverOptions", sentinelOptionsMethod.Type.In(2).String())
+		assert.Equal(t, "int", sentinelOptionsMethod.Type.In(3).String())
+		assert.Equal(t, "[]string", sentinelOptionsMethod.Type.In(4).String())
+		assert.Equal(t, "[]string", sentinelOptionsMethod.Type.In(5).String())
 	})
 
 	t.Run("many dirty and fake-delete compatibility APIs are retained", func(t *testing.T) {
@@ -403,6 +410,39 @@ func TestExtraBackportInventoryCachedSearchLazyDeleteNoNilRows(t *testing.T) {
 	assert.ElementsMatch(t, []string{"alpha", "charlie"}, []string{found[0].Name, found[1].Name})
 }
 
+func TestExtraBackportInventoryCachedSearchReferenceLazyDelete(t *testing.T) {
+	var entity *cachedSearchEntity
+	var reference *cachedSearchRefEntity
+	engine, def := prepareTables(t, &Registry{}, 8, "extra_inventory_cached_reference_delete", "2.0", reference, entity)
+	defer def()
+	engine.GetRedis().FlushDB()
+	schema := engine.GetRegistry().GetTableSchemaForEntity(entity).(*tableSchema)
+	schema.localCacheName = "default"
+	schema.hasLocalCache = true
+
+	reference = &cachedSearchRefEntity{Name: "reference-row"}
+	engine.Flush(reference)
+	entity = &cachedSearchEntity{Name: "indexed-row", Age: 33, ReferenceOne: reference}
+	engine.Flush(entity)
+
+	var rows []*cachedSearchEntity
+	totalRows := engine.CachedSearch(&rows, "IndexReference", nil, reference.ID)
+	require.Equal(t, 1, totalRows)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0])
+
+	engine.DeleteLazy(entity)
+	receiver := NewBackgroundConsumer(engine)
+	receiver.DisableLoop()
+	receiver.blockTime = time.Millisecond
+	receiver.Digest(context.Background())
+
+	rows = nil
+	totalRows = engine.CachedSearch(&rows, "IndexReference", nil, reference.ID)
+	assert.Equal(t, 0, totalRows)
+	assert.Empty(t, rows)
+}
+
 func TestExtraBackportInventoryUUIDLazyFlushRoundTrip(t *testing.T) {
 	var entity *extraInventoryUUIDLazyEntity
 	engine, def := prepareTables(t, &Registry{}, 8, "extra_inventory_uuid", "2.0", entity)
@@ -523,6 +563,17 @@ func TestExtraBackportInventoryRedisCredentialOptions(t *testing.T) {
 		assert.Equal(t, 15, options.DB)
 	})
 
+	t.Run("direct redis credentials allow password without username", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.RegisterRedisWithCredentials("localhost:6382", "tenant", "", "pass-only", 15, "auth")
+
+		options := registry.redisPools["auth"].getClient().Options()
+		assert.Equal(t, "localhost:6382", options.Addr)
+		assert.Equal(t, "", options.Username)
+		assert.Equal(t, "pass-only", options.Password)
+		assert.Equal(t, 15, options.DB)
+	})
+
 	t.Run("sentinel credentials populate failover client options when username is set", func(t *testing.T) {
 		registry := NewRegistry()
 		registry.RegisterRedisSentinelWithCredentials("master", "tenant", "user", "pass", 4, []string{"s1:26379", "s2:26379"}, "sentinel")
@@ -531,6 +582,38 @@ func TestExtraBackportInventoryRedisCredentialOptions(t *testing.T) {
 		assert.Equal(t, "user", options.Username)
 		assert.Equal(t, "pass", options.Password)
 		assert.Equal(t, 4, options.DB)
+	})
+
+	t.Run("sentinel credentials allow password without username", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.RegisterRedisSentinelWithCredentials("master", "tenant", "", "pass-only", 4, []string{"s1:26379", "s2:26379"}, "sentinel")
+
+		options := registry.redisPools["sentinel"].getClient().Options()
+		assert.Equal(t, "", options.Username)
+		assert.Equal(t, "pass-only", options.Password)
+		assert.Equal(t, 4, options.DB)
+	})
+
+	t.Run("sentinel options registration carries provided options into pool config", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.RegisterRedisSentinelWithOptions("tenant", redis.FailoverOptions{
+			MasterName: "master",
+			Username:   "user",
+			Password:   "pass",
+			MaxRetries: 6,
+		}, 4, []string{"s1:26379", "s2:26379"}, "sentinel")
+
+		config := registry.redisPools["sentinel"]
+		options := config.getClient().Options()
+		assert.Equal(t, "tenant", config.GetNamespace())
+		assert.True(t, config.HasNamespace())
+		assert.Equal(t, "[s1:26379 s2:26379]", config.GetAddress())
+		assert.Equal(t, 4, config.GetDatabase())
+		assert.Equal(t, "user", options.Username)
+		assert.Equal(t, "pass", options.Password)
+		assert.Equal(t, 4, options.DB)
+		assert.Equal(t, 6, options.MaxRetries)
+		assert.Equal(t, time.Minute*2, options.MaxConnAge)
 	})
 }
 

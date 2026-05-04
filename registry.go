@@ -274,13 +274,11 @@ func (r *Registry) RegisterRedisWithCredentials(address, namespace, user, passwo
 		Addr:       address,
 		DB:         db,
 		MaxConnAge: time.Minute * 2,
+		Username:   user,
+		Password:   password,
 	}
 	if strings.HasSuffix(address, ".sock") {
 		options.Network = "unix"
-	}
-	if user != "" {
-		options.Username = user
-		options.Password = password
 	}
 	client := redis.NewClient(options)
 	r.registerRedis(client, code, address, namespace, db)
@@ -296,12 +294,20 @@ func (r *Registry) RegisterRedisSentinelWithCredentials(masterName, namespace, u
 		SentinelAddrs: sentinels,
 		DB:            db,
 		MaxConnAge:    time.Minute * 2,
-	}
-	if user != "" {
-		options.Username = user
-		options.Password = password
+		Username:      user,
+		Password:      password,
 	}
 	client := redis.NewFailoverClient(options)
+	r.registerRedis(client, code, fmt.Sprintf("%v", sentinels), namespace, db)
+}
+
+func (r *Registry) RegisterRedisSentinelWithOptions(namespace string, options redis.FailoverOptions, db int, sentinels []string, code ...string) {
+	options.DB = db
+	options.SentinelAddrs = sentinels
+	if options.MaxConnAge == 0 {
+		options.MaxConnAge = time.Minute * 2
+	}
+	client := redis.NewFailoverClient(&options)
 	r.registerRedis(client, code, fmt.Sprintf("%v", sentinels), namespace, db)
 }
 
