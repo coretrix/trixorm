@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"reflect"
+	"sync"
 	"unsafe"
 )
 
@@ -13,8 +14,32 @@ type serializer struct {
 	buffer  *bytes.Buffer
 }
 
+var serializerPool = sync.Pool{
+	New: func() interface{} {
+		return newSerializer(nil)
+	},
+}
+
 func newSerializer(buf []uint8) *serializer {
 	return &serializer{buffer: bytes.NewBuffer(buf)}
+}
+
+func acquireSerializer(buf []uint8) *serializer {
+	serializer := serializerPool.Get().(*serializer)
+	serializer.Reset(buf)
+	return serializer
+}
+
+func releaseSerializer(serializer *serializer) {
+	if serializer == nil {
+		return
+	}
+	if serializer.buffer.Cap() > 1024*1024 {
+		serializer.buffer = bytes.NewBuffer(nil)
+	} else {
+		serializer.Reset(nil)
+	}
+	serializerPool.Put(serializer)
 }
 
 func (s *serializer) Read() []byte {

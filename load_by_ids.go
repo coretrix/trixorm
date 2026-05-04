@@ -32,7 +32,7 @@ func tryByIDs(serializer *serializer, engine *Engine, ids []uint64, entities ref
 		localCache = engine.GetLocalCache(requestCacheKey)
 	}
 
-	cacheKeysMap := make(map[string]int)
+	cacheKeysMap := make(map[string]int, lenIDs)
 	duplicates := make(map[string][]int)
 	for i, id := range ids {
 		key := schema.getCacheKey(id)
@@ -103,7 +103,7 @@ func tryByIDs(serializer *serializer, engine *Engine, ids []uint64, entities ref
 			}
 		}
 	}
-	var idsDB []uint64
+	idsDB := make([]uint64, 0, len(cacheKeysMap))
 	for _, v := range cacheKeysMap {
 		if v >= 0 {
 			idsDB = append(idsDB, ids[v])

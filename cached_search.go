@@ -57,12 +57,12 @@ func cachedSearch(serializer *serializer, engine *Engine, entities interface{}, 
 		pages[j] = strconv.Itoa(int(i) + 1)
 		j++
 	}
-	filledPages := make(map[string][]uint64)
+	filledPages := make(map[string][]uint64, len(pages))
 	fromRedis := false
 	var fromCache map[string]interface{}
 	var nilsKeys []string
 	if hasLocalCache {
-		nilsKeys = make([]string, 0)
+		nilsKeys = make([]string, 0, len(pages))
 		fromCacheLocal, hasInLocalCache := localCache.Get(cacheKey)
 		if hasInLocalCache {
 			fromCache = map[string]interface{}{"1": fromCacheLocal}
@@ -125,7 +125,7 @@ func cachedSearch(serializer *serializer, engine *Engine, entities interface{}, 
 		searchPager := NewPager(minPage, maxPage*pageSize)
 		results, total := searchIDsWithCount(false, engine, where, searchPager, entityType)
 		totalRows = total
-		cacheFields := make([]interface{}, 0)
+		cacheFields := make([]interface{}, 0, len(fromCache)*2)
 		for key, ids := range fromCache {
 			if ids == nil {
 				page := key
@@ -145,9 +145,10 @@ func cachedSearch(serializer *serializer, engine *Engine, entities interface{}, 
 					continue
 				}
 				sliceEnd = int(math.Min(float64(sliceEnd), float64(l)))
-				values := []uint64{uint64(total)}
 				foundIDs := results[sliceStart:sliceEnd]
 				filledPages[key] = foundIDs
+				values := make([]uint64, 1, len(foundIDs)+1)
+				values[0] = uint64(total)
 				values = append(values, foundIDs...)
 				cacheValue := fmt.Sprintf("%v", values)
 				cacheValue = strings.Trim(cacheValue, "[]")
@@ -169,7 +170,7 @@ func cachedSearch(serializer *serializer, engine *Engine, entities interface{}, 
 		localCache.Set(cacheKey, fields["1"])
 	}
 
-	resultsIDs := make([]uint64, 0)
+	resultsIDs := make([]uint64, 0, pager.GetPageSize())
 	for i := minCachePageCeil; i < maxCachePageCeil; i++ {
 		resultsIDs = append(resultsIDs, filledPages[strconv.Itoa(int(i)+1)]...)
 	}

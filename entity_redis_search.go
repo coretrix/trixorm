@@ -25,7 +25,9 @@ func (e *Engine) RedisSearchIds(entity Entity, query *RedisSearchQuery, pager *P
 }
 
 func (e *Engine) RedisSearch(entities interface{}, query *RedisSearchQuery, pager *Pager, references ...string) (totalRows uint64) {
-	return e.redisSearchBase(newSerializer(nil), entities, query, pager, references...)
+	serializer := acquireSerializer(nil)
+	defer releaseSerializer(serializer)
+	return e.redisSearchBase(serializer, entities, query, pager, references...)
 }
 
 func (e *Engine) RedisSearchCount(entity Entity, query *RedisSearchQuery) (totalRows uint64) {
@@ -58,7 +60,9 @@ func (e *Engine) redisSearchOne(entity Entity, query *RedisSearchQuery, referenc
 	if total == 0 {
 		return false
 	}
-	found, _ = loadByID(newSerializer(nil), e, ids[0], entity, true, references...)
+	serializer := acquireSerializer(nil)
+	defer releaseSerializer(serializer)
+	found, _ = loadByID(serializer, e, ids[0], entity, true, references...)
 	return found
 }
 

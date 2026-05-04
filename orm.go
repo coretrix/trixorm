@@ -127,7 +127,9 @@ func (orm *ORM) IsToDelete() bool {
 }
 
 func (orm *ORM) GetDirtyBind() (bind Bind, has bool) {
-	bindBuilder, has := orm.buildDirtyBind(newSerializer(nil))
+	serializer := acquireSerializer(nil)
+	defer releaseSerializer(serializer)
+	bindBuilder, has := orm.buildDirtyBind(serializer)
 	return bindBuilder.bind, has
 }
 

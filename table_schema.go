@@ -135,6 +135,7 @@ type tableSchema struct {
 	searchCacheName         string
 	hasSearchCache          bool
 	cachePrefix             string
+	cachePrefixWithColon    string
 	structureHash           uint64
 	hasFakeDelete           bool
 	hasSearchableFakeDelete bool
@@ -602,6 +603,7 @@ func (tableSchema *tableSchema) init(registry *Registry, entityType reflect.Type
 	tableSchema.refOne = oneRefs
 	tableSchema.refMany = manyRefs
 	tableSchema.cachePrefix = cachePrefix
+	tableSchema.cachePrefixWithColon = cachePrefix + ":"
 	tableSchema.uniqueIndices = uniqueIndicesSimple
 	tableSchema.uniqueIndicesGlobal = uniqueIndicesSimpleGlobal
 	tableSchema.hasLog = logPoolName != ""
@@ -1342,7 +1344,11 @@ func extractTag(registry *Registry, field reflect.StructField) map[string]map[st
 }
 
 func (tableSchema *tableSchema) getCacheKey(id uint64) string {
-	return tableSchema.cachePrefix + ":" + strconv.FormatUint(id, 10)
+	cachePrefix := tableSchema.cachePrefixWithColon
+	if cachePrefix == "" {
+		cachePrefix = tableSchema.cachePrefix + ":"
+	}
+	return cachePrefix + strconv.FormatUint(id, 10)
 }
 
 func (tableSchema *tableSchema) NewEntity() Entity {
