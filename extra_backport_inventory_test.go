@@ -26,6 +26,30 @@ type extraInventoryManualIDEntity struct {
 	Name string `orm:"unique=Name"`
 }
 
+type extraInventorySetFieldNumericEntity struct {
+	ORM
+	ID            uint
+	Uint          uint
+	Int           int
+	Float         float64
+	UintNullable  *uint
+	IntNullable   *int
+	FloatNullable *float64
+}
+
+type extraInventoryCloneEmbedded struct {
+	Label string
+	Count int
+}
+
+type extraInventoryCloneEntity struct {
+	ORM
+	ID   uint
+	Name string
+	Age  int
+	extraInventoryCloneEmbedded
+}
+
 type extraInventoryTemporalEntity struct {
 	ORM
 	ID          uint
@@ -49,6 +73,24 @@ type extraInventoryUUIDLazyEntity struct {
 	ORM  `orm:"uuid;localCache;redisCache;asyncRedisLazyFlush=default"`
 	ID   uint64
 	Name string `orm:"unique=Name"`
+}
+
+type extraInventoryUUIDInvalidEntity struct {
+	ORM `orm:"uuid"`
+	ID  uint
+}
+
+type extraInventoryMissingRefParentEntity struct {
+	ORM `orm:"localCache"`
+	ID  uint
+	Key string `orm:"unique=Key"`
+}
+
+type extraInventoryMissingRefChildEntity struct {
+	ORM
+	ID     uint
+	Name   string
+	Parent *extraInventoryMissingRefParentEntity
 }
 
 func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
@@ -129,10 +171,16 @@ func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 		assert.False(t, hasWhereShowFakeDeleted)
 	})
 
-	t.Run("not-yet-ported helper APIs are absent from the current surface", func(t *testing.T) {
-		_, hasEntityClone := reflect.TypeOf(&extraInventoryManualIDEntity{}).MethodByName("Clone")
-		assert.False(t, hasEntityClone)
+	t.Run("category one helper APIs are now present", func(t *testing.T) {
+		clone, hasEntityClone := reflect.TypeOf(&extraInventoryManualIDEntity{}).MethodByName("Clone")
+		require.True(t, hasEntityClone)
+		assert.Equal(t, 1, clone.Type.NumOut())
+		assert.Equal(t, reflect.TypeOf((*Entity)(nil)).Elem(), clone.Type.Out(0))
 
+		assert.Equal(t, reflect.Func, reflect.ValueOf(SetUUIDServerID).Kind())
+	})
+
+	t.Run("later helper APIs are still absent from the current surface", func(t *testing.T) {
 		_, hasPagerString := reflect.TypeOf(&Pager{}).MethodByName("String")
 		assert.False(t, hasPagerString)
 
@@ -165,7 +213,7 @@ func TestExtraBackportInventoryInsertColumnBackticks(t *testing.T) {
 		Select: "visible",
 	})
 
-	insertQuery := extraInventoryFindLoggedQuery(t, logger, "INSERT INTO extraInventoryQuotedInsertEntity")
+	insertQuery := extraInventoryFindLoggedQuery(t, logger, "INSERT INTO `extraInventoryQuotedInsertEntity`")
 	columnList := insertQuery[strings.Index(insertQuery, "(")+1 : strings.Index(insertQuery, ")")]
 	columns := strings.Split(columnList, ",")
 	require.ElementsMatch(t, []string{"`Order`", "`Group`", "`Select`"}, columns)
@@ -173,6 +221,39 @@ func TestExtraBackportInventoryInsertColumnBackticks(t *testing.T) {
 		assert.True(t, strings.HasPrefix(column, "`"), column)
 		assert.True(t, strings.HasSuffix(column, "`"), column)
 	}
+}
+
+func TestExtraBackportInventorySetFieldEmptyNumericValues(t *testing.T) {
+	var entity *extraInventorySetFieldNumericEntity
+	engine, def := prepareTables(t, &Registry{}, 8, "", "2.0", entity)
+	defer def()
+
+	entity = &extraInventorySetFieldNumericEntity{}
+	engine.Load(entity)
+
+	require.NoError(t, entity.SetField("Uint", ""))
+	assert.Equal(t, uint(0), entity.Uint)
+
+	require.NoError(t, entity.SetField("Int", ""))
+	assert.Equal(t, 0, entity.Int)
+
+	require.NoError(t, entity.SetField("Float", ""))
+	assert.Equal(t, float64(0), entity.Float)
+
+	validUint := uint(44)
+	entity.UintNullable = &validUint
+	require.NoError(t, entity.SetField("UintNullable", ""))
+	assert.Nil(t, entity.UintNullable)
+
+	validInt := 45
+	entity.IntNullable = &validInt
+	require.NoError(t, entity.SetField("IntNullable", ""))
+	assert.Nil(t, entity.IntNullable)
+
+	validFloat := 46.7
+	entity.FloatNullable = &validFloat
+	require.NoError(t, entity.SetField("FloatNullable", ""))
+	assert.Nil(t, entity.FloatNullable)
 }
 
 func TestExtraBackportInventorySetFieldIDFlushesExplicitID(t *testing.T) {
@@ -190,6 +271,34 @@ func TestExtraBackportInventorySetFieldIDFlushesExplicitID(t *testing.T) {
 	require.True(t, engine.LoadByID(4242, loaded))
 	assert.Equal(t, uint(4242), loaded.ID)
 	assert.Equal(t, "manual-id", loaded.Name)
+}
+
+func TestExtraBackportInventoryEntityCloneCopiesFieldsWithoutID(t *testing.T) {
+	var entity *extraInventoryCloneEntity
+	engine, def := prepareTables(t, &Registry{}, 8, "", "2.0", entity)
+	defer def()
+
+	entity = &extraInventoryCloneEntity{
+		Name: "source",
+		Age:  30,
+		extraInventoryCloneEmbedded: extraInventoryCloneEmbedded{
+			Label: "embedded",
+			Count: 7,
+		},
+	}
+	engine.Flush(entity)
+
+	cloned := entity.Clone().(*extraInventoryCloneEntity)
+	assert.Equal(t, uint(0), cloned.ID)
+	assert.Equal(t, "source", cloned.Name)
+	assert.Equal(t, 30, cloned.Age)
+	assert.Equal(t, "embedded", cloned.Label)
+	assert.Equal(t, 7, cloned.Count)
+
+	cloned.Name = "clone"
+	cloned.Label = "changed"
+	assert.Equal(t, "source", entity.Name)
+	assert.Equal(t, "embedded", entity.Label)
 }
 
 func TestExtraBackportInventoryPost2038DateTimeRoundTrip(t *testing.T) {
@@ -225,6 +334,34 @@ func TestExtraBackportInventoryPost2038DateTimeRoundTrip(t *testing.T) {
 	assert.Equal(t, "future-updated", reloaded.Name)
 	assert.Equal(t, "2042-06-07 08:09:10", reloaded.DateTime.Format(timeFormat))
 	assert.Equal(t, "2042-06-07", reloaded.DateOnly.Format(dateformat))
+}
+
+func TestExtraBackportInventoryMissingReferenceCachesNil(t *testing.T) {
+	var parent *extraInventoryMissingRefParentEntity
+	var child *extraInventoryMissingRefChildEntity
+	engine, def := prepareTables(t, &Registry{}, 8, "extra_inventory_missing_ref", "2.0", parent, child)
+	defer def()
+
+	parent = &extraInventoryMissingRefParentEntity{Key: "missing-parent"}
+	child = &extraInventoryMissingRefChildEntity{Name: "child", Parent: parent}
+	engine.FlushMany(parent, child)
+
+	engine.GetMysql().Exec("SET FOREIGN_KEY_CHECKS = 0")
+	engine.GetMysql().Exec("DELETE FROM `extraInventoryMissingRefParentEntity` WHERE `ID` = ?", parent.ID)
+	engine.GetMysql().Exec("SET FOREIGN_KEY_CHECKS = 1")
+	engine.GetLocalCache().Clear()
+
+	loaded := &extraInventoryMissingRefChildEntity{}
+	require.True(t, engine.LoadByID(uint64(child.ID), loaded, "Parent"))
+	require.NotNil(t, loaded.Parent)
+	assert.False(t, loaded.Parent.IsLoaded())
+
+	loadedAgain := &extraInventoryMissingRefChildEntity{}
+	assert.NotPanics(t, func() {
+		require.True(t, engine.LoadByID(uint64(child.ID), loadedAgain, "Parent"))
+	})
+	require.NotNil(t, loadedAgain.Parent)
+	assert.False(t, loadedAgain.Parent.IsLoaded())
 }
 
 func TestExtraBackportInventoryCachedSearchLazyDeleteNoNilRows(t *testing.T) {
@@ -277,7 +414,8 @@ func TestExtraBackportInventoryUUIDLazyFlushRoundTrip(t *testing.T) {
 	require.NotZero(t, row.ID)
 
 	beforeDigest := &extraInventoryUUIDLazyEntity{}
-	assert.False(t, engine.LoadByID(row.ID, beforeDigest))
+	require.True(t, engine.LoadByID(row.ID, beforeDigest))
+	assert.Equal(t, "uuid-lazy", beforeDigest.Name)
 
 	receiver := NewBackgroundConsumer(engine)
 	receiver.DisableLoop()
@@ -289,6 +427,34 @@ func TestExtraBackportInventoryUUIDLazyFlushRoundTrip(t *testing.T) {
 	require.True(t, engine.LoadByID(row.ID, loaded))
 	assert.Equal(t, row.ID, loaded.ID)
 	assert.Equal(t, "uuid-lazy", loaded.Name)
+}
+
+func TestExtraBackportInventoryUUIDSchemaAndServerID(t *testing.T) {
+	registry := &Registry{}
+	registry.RegisterMySQLPool("root:root@tcp(localhost:3312)/test")
+	registry.RegisterEntity(&extraInventoryUUIDInvalidEntity{})
+	_, def, err := registry.Validate()
+	if def != nil {
+		defer def()
+	}
+	require.EqualError(t, err, "entity trixorm.extraInventoryUUIDInvalidEntity with uuid enabled must be unit64")
+
+	original := uuid()
+	SetUUIDServerID(1)
+	withServerID := uuid()
+	assert.Equal(t, uint64(1), withServerID>>56)
+	assert.Greater(t, withServerID, original)
+	SetUUIDServerID(0)
+}
+
+func TestExtraBackportInventoryCachePrefixUsesFinalBeeORMLength(t *testing.T) {
+	var entity *extraInventoryManualIDEntity
+	engine, def := prepareTables(t, &Registry{}, 8, "", "2.0", entity)
+	defer def()
+
+	schema := engine.GetRegistry().GetTableSchemaForEntity(entity).(*tableSchema)
+	assert.Len(t, schema.cachePrefix, 5)
+	assert.Regexp(t, `^[0-9a-f]{5}:\d+$`, schema.getCacheKey(123))
 }
 
 func TestExtraBackportInventoryRedisNamespaceRegressionScenarios(t *testing.T) {

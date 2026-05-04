@@ -436,8 +436,9 @@ func (f *flusher) executeUpdates() {
 func (f *flusher) executeInserts(flushPackage *flushPackage, lazy bool) {
 	for typeOf, values := range flushPackage.insertKeys {
 		schema := getTableSchema(f.engine.registry, typeOf)
-		f.stringBuilder.WriteString("INSERT INTO ")
+		f.stringBuilder.WriteString("INSERT INTO `")
 		f.stringBuilder.WriteString(schema.tableName)
+		f.stringBuilder.WriteString("`")
 		l := len(values)
 		if l > 0 {
 			f.stringBuilder.WriteString("(")
@@ -474,7 +475,10 @@ func (f *flusher) executeInserts(flushPackage *flushPackage, lazy bool) {
 			var logEvents []*LogQueueValue
 			var dirtyEvents []*dirtyQueueValue
 			for key, entity := range flushPackage.insertReflectValues[typeOf] {
-				logEvent, dirtyEvent := f.updateCacheForInserted(entity, lazy, 0, flushPackage.insertBinds[typeOf][key])
+				if schema.hasUUID {
+					entity.getORM().serialize(f.getSerializer())
+				}
+				logEvent, dirtyEvent := f.updateCacheForInserted(entity, lazy, entity.GetID(), flushPackage.insertBinds[typeOf][key])
 				if logEvent != nil {
 					logEvents = append(logEvents, logEvent)
 				}
@@ -579,9 +583,9 @@ func (f *flusher) flushUpdate(entity Entity, bindBuilder *bindBuilder, currentID
 	if !entity.IsLoaded() {
 		panic(fmt.Errorf("entity is not loaded and can't be updated: %v [%d]", entity.getORM().elem.Type().String(), currentID))
 	}
-	f.stringBuilder.WriteString("UPDATE ")
+	f.stringBuilder.WriteString("UPDATE `")
 	f.stringBuilder.WriteString(schema.GetTableName())
-	f.stringBuilder.WriteString(" SET ")
+	f.stringBuilder.WriteString("` SET ")
 	first := true
 	for key, value := range bindBuilder.sqlBind {
 		if !first {
@@ -743,7 +747,7 @@ func (f *flusher) updateCacheForInserted(entity Entity, lazy bool, id uint64, bi
 		cacheKey := schema.getCacheKey(id)
 		keys := f.getCacheQueriesKeys(schema, bind, nil, false, true)
 		if hasLocalCache {
-			if !lazy {
+			if !lazy || schema.hasUUID {
 				f.addLocalCacheSet(localCache.config.GetCode(), cacheKey, entity.getORM().copyBinary())
 			} else {
 				f.addLocalCacheDeletes(localCache.config.GetCode(), schema.getCacheKey(id))
@@ -751,7 +755,11 @@ func (f *flusher) updateCacheForInserted(entity Entity, lazy bool, id uint64, bi
 			f.addLocalCacheDeletes(localCache.config.GetCode(), keys...)
 		}
 		if hasRedis {
-			f.getRedisFlusher().Del(redisCache.config.GetCode(), cacheKey)
+			if schema.hasUUID {
+				f.getRedisFlusher().Set(redisCache.config.GetCode(), cacheKey, entity.getORM().binary)
+			} else {
+				f.getRedisFlusher().Del(redisCache.config.GetCode(), cacheKey)
+			}
 			f.getRedisFlusher().Del(redisCache.config.GetCode(), keys...)
 		}
 	}
