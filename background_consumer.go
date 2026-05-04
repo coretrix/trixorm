@@ -3,7 +3,6 @@ package trixorm
 import (
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +21,7 @@ const LogChannelName = "orm-log-channel"
 const RedisSearchIndexerChannelName = "orm-redis-search-channel"
 const RedisStreamGarbageCollectorChannelName = "orm-stream-garbage-collector"
 const AsyncConsumerGroupName = "orm-async-consumer"
+const BackgroundConsumerGroupName = AsyncConsumerGroupName
 
 type LogQueueValue struct {
 	PoolName  string
@@ -53,13 +53,17 @@ func NewBackgroundConsumer(engine *Engine) *BackgroundConsumer {
 	c := &BackgroundConsumer{redisFlusher: &redisFlusher{engine: engine}}
 	c.engine = engine
 	c.loop = true
-	c.blockTime = time.Second * 30
+	c.blockTime = time.Second * 10
 	c.lazyFlushModulo = 11
 	return c
 }
 
 func (r *BackgroundConsumer) SetLazyFlushWorkers(workers int) {
 	r.lazyFlushModulo = uint64(workers)
+}
+
+func (r *BackgroundConsumer) SetBlockTime(ttl time.Duration) {
+	r.eventConsumerBase.SetBlockTime(ttl)
 }
 
 type LazyFlushQueryErrorResolver func(engine *Engine, db *DB, sql string, queryError *mysql.MySQLError) error
@@ -243,7 +247,6 @@ func (r *BackgroundConsumer) Digest(ctx context.Context) bool {
 								}()
 								if deadlock {
 									time.Sleep(time.Millisecond * 30)
-									log.Printf("DEADLOCK FOUND\n%s\n", updateSQL)
 									func() {
 										db := r.engine.Clone().GetMysql(dbCode)
 										db.Begin()

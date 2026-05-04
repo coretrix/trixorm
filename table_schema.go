@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	jsoniter "github.com/json-iterator/go"
+
 	"github.com/pkg/errors"
 )
 
@@ -77,6 +79,15 @@ func initEnum(ref interface{}, defaultValue ...string) *enum {
 	return enum
 }
 
+type EntityLog struct {
+	LogID    uint64
+	EntityID uint64
+	Date     time.Time
+	Meta     map[string]interface{}
+	Before   map[string]interface{}
+	Changes  map[string]interface{}
+}
+
 type TableSchema interface {
 	GetTableName() string
 	GetType() reflect.Type
@@ -95,6 +106,7 @@ type TableSchema interface {
 	GetUniqueIndexes() map[string][]string
 	GetSchemaChanges(engine *Engine) (has bool, alters []Alter)
 	GetUsage(registry ValidatedRegistry) map[reflect.Type][]string
+	GetEntityLogs(engine *Engine, entityID uint64, pager *Pager, where *Where) []EntityLog
 }
 
 type tableSchema struct {
@@ -282,6 +294,46 @@ func (tableSchema *tableSchema) GetUsage(registry ValidatedRegistry) map[reflect
 			schema := getTableSchema(vRegistry, t)
 			tableSchema.getUsage(schema.fields, schema.t, "", results)
 		}
+	}
+	return results
+}
+
+func (tableSchema *tableSchema) GetEntityLogs(engine *Engine, entityID uint64, pager *Pager, where *Where) []EntityLog {
+	var results []EntityLog
+	if !tableSchema.hasLog {
+		return results
+	}
+	db := engine.GetMysql(tableSchema.logPoolName)
+	if pager == nil {
+		pager = NewPager(1, 1000)
+	}
+	if where == nil {
+		where = NewWhere("1")
+	}
+	fullQuery := "SELECT `id`, `added_at`, `meta`, `before`, `changes` FROM `" + tableSchema.logTableName + "` WHERE "
+	fullQuery += "entity_id = " + strconv.FormatUint(entityID, 10) + " "
+	fullQuery += "AND " + where.String() + " " + pager.String()
+	rows, closeRows := db.Query(fullQuery, where.GetParameters()...)
+	defer closeRows()
+	id := uint64(0)
+	addedAt := ""
+	meta := sql.NullString{}
+	before := sql.NullString{}
+	changes := sql.NullString{}
+	for rows.Next() {
+		rows.Scan(&id, &addedAt, &meta, &before, &changes)
+		entityLog := EntityLog{LogID: id, EntityID: entityID}
+		entityLog.Date, _ = time.ParseInLocation(timeFormat, addedAt, time.Local)
+		if meta.Valid {
+			checkError(jsoniter.ConfigFastest.UnmarshalFromString(meta.String, &entityLog.Meta))
+		}
+		if before.Valid {
+			checkError(jsoniter.ConfigFastest.UnmarshalFromString(before.String, &entityLog.Before))
+		}
+		if changes.Valid {
+			checkError(jsoniter.ConfigFastest.UnmarshalFromString(changes.String, &entityLog.Changes))
+		}
+		results = append(results, entityLog)
 	}
 	return results
 }

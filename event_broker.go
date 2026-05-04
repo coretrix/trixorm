@@ -71,6 +71,9 @@ type EventBroker interface {
 	Publish(stream string, body interface{}, meta ...string) (id string)
 	Consumer(group string) EventsConsumer
 	NewFlusher() EventFlusher
+	GetStreamsStatistics(stream ...string) []*RedisStreamStatistics
+	GetStreamStatistics(stream string) *RedisStreamStatistics
+	GetStreamGroupStatistics(stream, group string) *RedisStreamGroupStatistics
 }
 
 type EventFlusher interface {
@@ -159,6 +162,7 @@ type EventsConsumer interface {
 	ConsumeMany(ctx context.Context, nr, count int, handler EventConsumerHandler) bool
 	Claim(from, to int)
 	DisableLoop()
+	SetBlockTime(ttl time.Duration)
 }
 
 func (eb *eventBroker) Consumer(group string) EventsConsumer {
@@ -168,7 +172,7 @@ func (eb *eventBroker) Consumer(group string) EventsConsumer {
 	}
 	redisPool := eb.engine.registry.redisStreamPools[streams[0]]
 	return &eventsConsumer{
-		eventConsumerBase: eventConsumerBase{engine: eb.engine, loop: true, blockTime: time.Second * 30},
+		eventConsumerBase: eventConsumerBase{engine: eb.engine, loop: true, blockTime: time.Second * 10},
 		redis:             eb.engine.GetRedis(redisPool),
 		streams:           streams,
 		group:             group,
@@ -194,6 +198,10 @@ type eventsConsumer struct {
 
 func (b *eventConsumerBase) DisableLoop() {
 	b.loop = false
+}
+
+func (b *eventConsumerBase) SetBlockTime(ttl time.Duration) {
+	b.blockTime = ttl
 }
 
 func (r *eventsConsumer) Consume(ctx context.Context, count int, handler EventConsumerHandler) bool {

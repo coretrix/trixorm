@@ -200,15 +200,30 @@ func TestExtraBackportInventoryCurrentAPISurface(t *testing.T) {
 		assert.True(t, hasCancelDelete)
 	})
 
-	t.Run("later helper APIs are still absent from the current surface", func(t *testing.T) {
+	t.Run("category four helper APIs are now present", func(t *testing.T) {
 		_, hasPagerString := reflect.TypeOf(&Pager{}).MethodByName("String")
-		assert.False(t, hasPagerString)
-
-		_, hasSetMemoryOnly := reflect.TypeOf(&ORM{}).MethodByName("SetMemoryOnly")
-		assert.False(t, hasSetMemoryOnly)
+		assert.True(t, hasPagerString)
 
 		_, hasSetBlockTime := reflect.TypeOf(&BackgroundConsumer{}).MethodByName("SetBlockTime")
-		assert.False(t, hasSetBlockTime)
+		assert.True(t, hasSetBlockTime)
+
+		eventBrokerType := reflect.TypeOf((*EventBroker)(nil)).Elem()
+		for _, method := range []string{"GetStreamsStatistics", "GetStreamStatistics", "GetStreamGroupStatistics"} {
+			_, hasMethod := eventBrokerType.MethodByName(method)
+			assert.True(t, hasMethod, method)
+		}
+
+		eventConsumerType := reflect.TypeOf((*EventsConsumer)(nil)).Elem()
+		_, hasConsumerSetBlockTime := eventConsumerType.MethodByName("SetBlockTime")
+		assert.True(t, hasConsumerSetBlockTime)
+
+		_, hasEntityLogs := reflect.TypeOf((*TableSchema)(nil)).Elem().MethodByName("GetEntityLogs")
+		assert.True(t, hasEntityLogs)
+	})
+
+	t.Run("later helper APIs are still absent from the current surface", func(t *testing.T) {
+		_, hasSetMemoryOnly := reflect.TypeOf(&ORM{}).MethodByName("SetMemoryOnly")
+		assert.False(t, hasSetMemoryOnly)
 	})
 }
 
@@ -803,4 +818,86 @@ func extraInventoryFindLoggedQuery(t *testing.T, logger *testLogHandler, needle 
 	}
 	require.Failf(t, "query not found", "missing query containing %q in %#v", needle, logger.Logs)
 	return ""
+}
+
+func TestExtraBackportInventoryStreamsBackgroundConsumersAndLogs(t *testing.T) {
+	t.Run("pager string and default block time", func(t *testing.T) {
+		assert.Equal(t, "LIMIT 20,10", NewPager(3, 10).String())
+		assert.Equal(t, "orm-async-consumer", AsyncConsumerGroupName)
+		assert.Equal(t, AsyncConsumerGroupName, BackgroundConsumerGroupName)
+
+		backgroundConsumer := NewBackgroundConsumer(&Engine{})
+		assert.Equal(t, time.Second*10, backgroundConsumer.blockTime)
+		backgroundConsumer.SetBlockTime(time.Millisecond * 25)
+		assert.Equal(t, time.Millisecond*25, backgroundConsumer.blockTime)
+	})
+
+	t.Run("event broker exposes stream statistics and configurable block time", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.RegisterRedis("localhost:6382", "extra_inventory_streams", 15)
+		registry.RegisterRedisStream("extra-inventory-stream", "default", []string{"extra-inventory-group"})
+		validatedRegistry, def, err := registry.Validate()
+		require.NoError(t, err)
+		defer def()
+
+		engine := validatedRegistry.CreateEngine()
+		redisCache := engine.GetRedis()
+		redisCache.FlushDB()
+
+		eventBroker := engine.GetEventBroker()
+		eventsConsumer := eventBroker.Consumer("extra-inventory-group").(*eventsConsumer)
+		assert.Equal(t, time.Second*10, eventsConsumer.blockTime)
+		eventsConsumer.SetBlockTime(time.Millisecond * 50)
+		assert.Equal(t, time.Millisecond*50, eventsConsumer.blockTime)
+
+		redisCache.XGroupCreateMkStream("extra-inventory-stream", "extra-inventory-group", "0")
+		eventID := eventBroker.Publish("extra-inventory-stream", map[string]string{"kind": "test"})
+		require.NotEmpty(t, eventID)
+
+		stats := eventBroker.GetStreamsStatistics("extra-inventory-stream")
+		require.Len(t, stats, 1)
+		assert.Equal(t, "extra-inventory-stream", stats[0].Stream)
+		assert.Equal(t, "default", stats[0].RedisPool)
+		assert.Equal(t, uint64(1), stats[0].Len)
+
+		streamStats := eventBroker.GetStreamStatistics("extra-inventory-stream")
+		require.NotNil(t, streamStats)
+		assert.Equal(t, stats[0].Len, streamStats.Len)
+
+		groupStats := eventBroker.GetStreamGroupStatistics("extra-inventory-stream", "extra-inventory-group")
+		require.NotNil(t, groupStats)
+		assert.Equal(t, "extra-inventory-group", groupStats.Group)
+		assert.Equal(t, uint64(0), groupStats.Pending)
+
+		missingGroupStats := eventBroker.GetStreamGroupStatistics("extra-inventory-stream", "missing-group")
+		require.NotNil(t, missingGroupStats)
+		assert.Equal(t, "missing-group", missingGroupStats.Group)
+		assert.Equal(t, int64(1), missingGroupStats.Lag)
+	})
+
+	t.Run("entity log getter fills date and decoded payloads", func(t *testing.T) {
+		var entity *logReceiverEntity1
+		registry := NewRegistry()
+		registry.ForceEntityLogInAllEntities("default")
+		engine, def := prepareTables(t, registry, 8, "", "2.0", entity)
+		defer def()
+		engine.GetRedis().FlushDB()
+
+		backgroundConsumer := NewBackgroundConsumer(engine)
+		backgroundConsumer.DisableLoop()
+		backgroundConsumer.SetBlockTime(time.Millisecond)
+
+		entity = &logReceiverEntity1{Name: "Logged", LastName: "Entity", Country: "MK"}
+		engine.Flush(entity)
+		backgroundConsumer.Digest(context.Background())
+
+		schema := engine.GetRegistry().GetTableSchemaForEntity(entity)
+		logs := schema.GetEntityLogs(engine, uint64(entity.ID), NewPager(1, 10), nil)
+		require.Len(t, logs, 1)
+		assert.Equal(t, uint64(entity.ID), logs[0].EntityID)
+		assert.False(t, logs[0].Date.IsZero())
+		assert.Equal(t, "Logged", logs[0].Changes["Name"])
+		assert.Equal(t, "Entity", logs[0].Changes["LastName"])
+		assert.Equal(t, "MK", logs[0].Changes["Country"])
+	})
 }
