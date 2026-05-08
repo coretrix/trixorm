@@ -825,6 +825,28 @@ func (attributes schemaFieldAttributes) IsInByRedisSearch() bool {
 	return attributes.HasSearchable || attributes.HasSortable
 }
 
+func (attributes schemaFieldAttributes) getStringRedisSearchMode() string {
+	columnName := attributes.GetColumnName()
+	searchableMode, hasSearchable := attributes.Tags["searchable"]
+	_, hasTag := attributes.Tags["tag"]
+	if hasTag {
+		panic(fmt.Errorf("invalid redis search string config for field %s; use searchable=tag instead of tag", columnName))
+	}
+	if !hasSearchable {
+		return redisSearchIndexFieldText
+	}
+	switch searchableMode {
+	case "text":
+		return redisSearchIndexFieldText
+	case "tag":
+		return redisSearchIndexFieldTAG
+	case "true":
+		panic(fmt.Errorf("invalid redis search string config for field %s; use searchable=text or searchable=tag", columnName))
+	default:
+		panic(fmt.Errorf("invalid redis search string config for field %s; use searchable=text or searchable=tag, got searchable=%s", columnName, searchableMode))
+	}
+}
+
 func (tableSchema *tableSchema) buildUintField(attributes schemaFieldAttributes) {
 	attributes.Fields.uintegers = append(attributes.Fields.uintegers, attributes.Index)
 	columnName := attributes.GetColumnName()
@@ -952,14 +974,23 @@ func (tableSchema *tableSchema) buildStringField(attributes schemaFieldAttribute
 	} else {
 		attributes.Fields.strings = append(attributes.Fields.strings, attributes.Index)
 	}
+	searchMode := redisSearchIndexFieldTAG
+	if !hasEnum {
+		searchMode = attributes.getStringRedisSearchMode()
+	}
 	if attributes.IsInByRedisSearch() {
 		if hasEnum {
 			tableSchema.redisSearchIndex.AddTagField(columnName, attributes.HasSortable, !attributes.HasSearchable, ",")
-			tableSchema.mapBindToRedisSearch[columnName] = defaultRedisSearchMapperNullableString
+			tableSchema.mapBindToRedisSearch[columnName] = defaultRedisSearchMapperNullableTag
 		} else {
-			stem, hasStem := attributes.Tags["stem"]
-			tableSchema.redisSearchIndex.AddTextField(columnName, 1.0, attributes.HasSortable, !attributes.HasSearchable, !hasStem || stem != "true")
-			tableSchema.mapBindToRedisSearch[columnName] = defaultRedisSearchMapperNullableString
+			if searchMode == redisSearchIndexFieldTAG {
+				tableSchema.redisSearchIndex.AddTagField(columnName, attributes.HasSortable, !attributes.HasSearchable, ",")
+				tableSchema.mapBindToRedisSearch[columnName] = defaultRedisSearchMapperNullableTag
+			} else {
+				stem, hasStem := attributes.Tags["stem"]
+				tableSchema.redisSearchIndex.AddTextField(columnName, 1.0, attributes.HasSortable, !attributes.HasSearchable, !hasStem || stem != "true")
+				tableSchema.mapBindToRedisSearch[columnName] = defaultRedisSearchMapperNullableString
+			}
 		}
 	}
 	tableSchema.mapBindToScanPointer[columnName] = func() interface{} {
@@ -982,7 +1013,7 @@ func (tableSchema *tableSchema) buildStringSliceField(attributes schemaFieldAttr
 		attributes.Fields.sets = append(attributes.Fields.sets, registry.enums[setCode])
 		if attributes.IsInByRedisSearch() {
 			tableSchema.redisSearchIndex.AddTagField(columnName, attributes.HasSortable, !attributes.HasSearchable, ",")
-			tableSchema.mapBindToRedisSearch[columnName] = defaultRedisSearchMapperNullableString
+			tableSchema.mapBindToRedisSearch[columnName] = defaultRedisSearchMapperNullableTag
 		}
 	} else {
 		attributes.Fields.jsons = append(attributes.Fields.jsons, attributes.Index)
@@ -1140,6 +1171,10 @@ func (tableSchema *tableSchema) buildStructField(attributes schemaFieldAttribute
 
 func (tableSchema *tableSchema) buildPointerField(attributes schemaFieldAttributes) {
 	columnName := attributes.GetColumnName()
+	if attributes.TypeName == "*string" && (attributes.HasSearchable || attributes.HasSortable || attributes.Tags["tag"] != "") {
+		attributes.getStringRedisSearchMode()
+		panic(fmt.Errorf("invalid redis search string config for field %s; *string redis search fields are not supported, use string with searchable=text or searchable=tag", columnName))
+	}
 	modelType := reflect.TypeOf((*Entity)(nil)).Elem()
 	if attributes.Field.Type.Implements(modelType) {
 		attributes.Fields.refs = append(attributes.Fields.refs, attributes.Index)
@@ -1423,6 +1458,13 @@ var defaultRedisSearchMapperNullableString = func(val interface{}) interface{} {
 		return "NULL"
 	}
 	return EscapeRedisSearchString(val.(string))
+}
+
+var defaultRedisSearchMapperNullableTag = func(val interface{}) interface{} {
+	if val == nil {
+		return "NULL"
+	}
+	return redisSearchTagValue(val.(string))
 }
 
 var defaultRedisSearchMapperNullableNumeric = func(val interface{}) interface{} {

@@ -55,13 +55,16 @@ func (p *redisSearchIndexPusher) setField(key string, value interface{}) {
 
 func (p *redisSearchIndexPusher) SetTag(key string, tag ...string) {
 	for i, val := range tag {
-		if val == "" {
-			tag[i] = "NULL"
-		} else {
-			tag[i] = EscapeRedisSearchString(val)
-		}
+		tag[i] = redisSearchTagValue(val)
 	}
 	p.fields = append(p.fields, key, strings.Join(tag, ","))
+}
+
+func redisSearchTagValue(val string) string {
+	if val == "" {
+		return "NULL"
+	}
+	return val
 }
 
 func (p *redisSearchIndexPusher) SetUint(key string, value uint64) {

@@ -23,8 +23,8 @@ type redisSearchEntity struct {
 	BalanceNullable   *int64             `orm:"searchable;sortable"`
 	Enum              string             `orm:"enum=trixorm.TestEnum;required;searchable"`
 	EnumNullable      string             `orm:"enum=trixorm.TestEnum;searchable"`
-	Name              string             `orm:"searchable"`
-	NameStem          string             `orm:"searchable;stem"`
+	Name              string             `orm:"searchable=text"`
+	NameStem          string             `orm:"searchable=text;stem"`
 	Set               []string           `orm:"set=trixorm.TestEnum;required;searchable"`
 	SetNullable       []string           `orm:"set=trixorm.TestEnum;searchable"`
 	Bool              bool               `orm:"searchable;sortable"`
@@ -43,6 +43,7 @@ type redisSearchEntity struct {
 	BalanceNullable32 *int32                 `orm:"sortable"`
 	ReferenceMany     []*redisNoSearchEntity `orm:"searchable"`
 	FakeDelete        bool                   `orm:"searchable"`
+	StringTag         string                 `orm:"searchable=tag"`
 }
 
 type redisSearchEntityNoSearchableFakeDelete struct {
@@ -179,11 +180,91 @@ func TestEntityRedisSearchNamespace(t *testing.T) {
 	testEntityRedisSearch(t, "test")
 }
 
+func assertRedisSearchFieldType(t *testing.T, engine *Engine, entity Entity, fieldName string, fieldType string) {
+	t.Helper()
+	schema := engine.GetRegistry().GetTableSchemaForEntity(entity).(*tableSchema)
+	for _, field := range schema.redisSearchIndex.Fields {
+		if field.Name == fieldName {
+			assert.Equal(t, fieldType, field.Type)
+			return
+		}
+	}
+	assert.Failf(t, "missing redis search field", "field %s not found", fieldName)
+}
+
+func TestEntityRedisSearchStringSearchableConfigValidation(t *testing.T) {
+	assertInvalidStringSearchConfig := func(entity Entity, expected string) {
+		t.Helper()
+		assert.PanicsWithError(t, expected, func() {
+			registry := &Registry{}
+			_, def := prepareTables(t, registry, 5, "", "2.0", entity)
+			if def != nil {
+				defer def()
+			}
+		})
+	}
+
+	type bareSearchableEntity struct {
+		ORM  `orm:"redisSearch=search"`
+		ID   uint
+		Name string `orm:"searchable"`
+	}
+	assertInvalidStringSearchConfig(
+		&bareSearchableEntity{},
+		"invalid redis search string config for field Name; use searchable=text or searchable=tag",
+	)
+
+	type tagFlagEntity struct {
+		ORM  `orm:"redisSearch=search"`
+		ID   uint
+		Name string `orm:"tag"`
+	}
+	assertInvalidStringSearchConfig(
+		&tagFlagEntity{},
+		"invalid redis search string config for field Name; use searchable=tag instead of tag",
+	)
+
+	type invalidSearchableEntity struct {
+		ORM  `orm:"redisSearch=search"`
+		ID   uint
+		Name string `orm:"searchable=foo"`
+	}
+	assertInvalidStringSearchConfig(
+		&invalidSearchableEntity{},
+		"invalid redis search string config for field Name; use searchable=text or searchable=tag, got searchable=foo",
+	)
+
+	type bareSearchableStringPointerEntity struct {
+		ORM  `orm:"redisSearch=search"`
+		ID   uint
+		Name *string `orm:"searchable"`
+	}
+	assertInvalidStringSearchConfig(
+		&bareSearchableStringPointerEntity{},
+		"invalid redis search string config for field Name; use searchable=text or searchable=tag",
+	)
+
+	type searchableStringPointerEntity struct {
+		ORM  `orm:"redisSearch=search"`
+		ID   uint
+		Name *string `orm:"searchable=text"`
+	}
+	assertInvalidStringSearchConfig(
+		&searchableStringPointerEntity{},
+		"invalid redis search string config for field Name; *string redis search fields are not supported, use string with searchable=text or searchable=tag",
+	)
+}
+
 func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 	var entity *redisSearchEntity
 	registry := &Registry{}
 	registry.RegisterEnumStruct("trixorm.TestEnum", TestEnum)
 	engine, def := prepareTables(t, registry, 5, redisNamespace, "2.0", entity, &redisNoSearchEntity{}, &redisNoSearchEntity{})
+	assertRedisSearchFieldType(t, engine, entity, "Name", redisSearchIndexFieldText)
+	assertRedisSearchFieldType(t, engine, entity, "NameStem", redisSearchIndexFieldText)
+	assertRedisSearchFieldType(t, engine, entity, "StringTag", redisSearchIndexFieldTAG)
+	assertRedisSearchFieldType(t, engine, entity, "Enum", redisSearchIndexFieldTAG)
+	assertRedisSearchFieldType(t, engine, entity, "Set", redisSearchIndexFieldTAG)
 
 	alters := engine.GetRedisSearchIndexAlters()
 	assert.Len(t, alters, 0)
@@ -207,6 +288,7 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 		e.Set = []string{"a"}
 		e.Name = "dog " + strconv.Itoa(i)
 		e.NameStem = "carrot " + strconv.Itoa(i)
+		e.StringTag = "dog-2024-01-10"
 		if i > 20 {
 			v := uint64(i)
 			e.AgeNullable = &v
@@ -218,6 +300,7 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 			e.EnumNullable = TestEnum.B
 			e.Name = "Cat " + strconv.Itoa(i)
 			e.NameStem = "Orange " + strconv.Itoa(i)
+			e.StringTag = "cat-2024-01-10"
 			b := false
 			e.BoolNullable = &b
 			f := 10.2
@@ -235,6 +318,7 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 			e.SetNullable = []string{"a", "b", "c"}
 			e.Name = "cats " + strconv.Itoa(i)
 			e.NameStem = "oranges " + strconv.Itoa(i)
+			e.StringTag = "cats-2024-01-10"
 			e.Bool = true
 			b := true
 			e.BoolNullable = &b
@@ -273,7 +357,7 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 	}
 	entityHash := fmt.Sprintf("%x", sha256.Sum256([]byte(reflect.TypeOf(redisSearchEntity{}).String())))
 	assert.Equal(t, []string{prefix + entityHash[:5] + ":"}, info.Definition.Prefixes)
-	assert.Len(t, info.Fields, 25)
+	assert.Len(t, info.Fields, 26)
 	assert.Equal(t, "ID", info.Fields[0].Name)
 	assert.Equal(t, "NUMERIC", info.Fields[0].Type)
 	assert.True(t, info.Fields[0].Sortable)
@@ -377,8 +461,12 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 	assert.True(t, info.Fields[23].NoStem)
 	assert.Equal(t, "FakeDelete", info.Fields[24].Name)
 	assert.Equal(t, "TAG", info.Fields[24].Type)
-	assert.False(t, info.Fields[23].Sortable)
-	assert.False(t, info.Fields[23].NoIndex)
+	assert.False(t, info.Fields[24].Sortable)
+	assert.False(t, info.Fields[24].NoIndex)
+	assert.Equal(t, "StringTag", info.Fields[25].Name)
+	assert.Equal(t, "TAG", info.Fields[25].Type)
+	assert.False(t, info.Fields[25].Sortable)
+	assert.False(t, info.Fields[25].NoIndex)
 
 	query := NewRedisSearchQuery()
 	query.Sort("Age", false)
@@ -621,6 +709,34 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 	assert.Len(t, ids, 10)
 	assert.Equal(t, uint64(41), ids[0])
 	assert.Equal(t, uint64(50), ids[9])
+
+	query = &RedisSearchQuery{}
+	query.Sort("Age", false)
+	query.FilterString("StringTag", "cat-2024-01-10")
+	ids, total = engine.RedisSearchIds(entity, query, NewPager(1, 50))
+	assert.Equal(t, uint64(20), total)
+	assert.Len(t, ids, 20)
+	assert.Equal(t, uint64(21), ids[0])
+	assert.Equal(t, uint64(40), ids[19])
+
+	aggregateQuery := NewRedisSearchQuery()
+	aggregateQuery.FilterString("StringTag", "cat-2024-01-10")
+	aggregate := aggregateQuery.Aggregate()
+	aggregate.GroupByFields([]string{"@StringTag"}, NewAggregateReduceCount("rows"))
+	aggregateRows, aggregateTotalRows := engine.RedisSearchAggregate(entity, aggregate, NewPager(1, 10))
+	assert.Equal(t, uint64(1), aggregateTotalRows)
+	assert.Len(t, aggregateRows, 1)
+	assert.Equal(t, "cat-2024-01-10", aggregateRows[0]["StringTag"])
+	assert.Equal(t, "20", aggregateRows[0]["rows"])
+
+	query = &RedisSearchQuery{}
+	query.Sort("Age", false)
+	query.FilterNotString("StringTag", "cat-2024-01-10")
+	ids, total = engine.RedisSearchIds(entity, query, NewPager(1, 50))
+	assert.Equal(t, uint64(30), total)
+	assert.Len(t, ids, 30)
+	assert.Equal(t, uint64(1), ids[0])
+	assert.Equal(t, uint64(50), ids[29])
 
 	query = &RedisSearchQuery{}
 	query.Sort("Age", false)
@@ -1068,6 +1184,11 @@ func testEntityRedisSearch(t *testing.T, redisNamespace string) {
 	assert.PanicsWithError(t, "numeric filter on fields Name with type TEXT not allowed", func() {
 		query = &RedisSearchQuery{}
 		query.FilterInt("Name", 23)
+		engine.RedisSearchOne(entity, query)
+	})
+	assert.PanicsWithError(t, "string filter on fields StringTag with type TAG not allowed", func() {
+		query = &RedisSearchQuery{}
+		query.QueryField("StringTag", "cat-2024-01-10")
 		engine.RedisSearchOne(entity, query)
 	})
 

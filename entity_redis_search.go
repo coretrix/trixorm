@@ -13,6 +13,9 @@ func (e *Engine) RedisSearchAggregate(entity Entity, query *RedisSearchAggregate
 	if query.query == nil {
 		query.query = NewRedisSearchQuery()
 	}
+
+	normalizeStringFiltersByRedisSearchSchema(schema, query.query)
+
 	if schema.hasSearchableFakeDelete {
 		query.query.hasFakeDelete = true
 	}
@@ -70,6 +73,9 @@ func redisSearch(e *Engine, schema *tableSchema, query *RedisSearchQuery, pager 
 	if schema.redisSearchIndex == nil {
 		panic(errors.Errorf("entity %s is not searchable", schema.t.String()))
 	}
+
+	normalizeStringFiltersByRedisSearchSchema(schema, query)
+
 	for k := range query.filtersString {
 		_, has := schema.columnMapping[k]
 		if !has {
@@ -138,4 +144,39 @@ func redisSearch(e *Engine, schema *tableSchema, query *RedisSearchQuery, pager 
 		ids[i], _ = strconv.ParseUint(v.(string)[schema.redisSearchPrefixLen:], 10, 64)
 	}
 	return ids, totalRows
+}
+
+func normalizeStringFiltersByRedisSearchSchema(schema *tableSchema, query *RedisSearchQuery) {
+	for fieldName := range query.filtersString {
+		fieldType := getRedisSearchFieldType(schema, fieldName)
+		if fieldType == redisSearchIndexFieldTAG {
+			if !query.stringFiltersAreExact(fieldName, false) {
+				panic(fmt.Errorf("string filter on fields %s with type %s not allowed", fieldName, fieldType))
+			}
+			query.moveStringFiltersToTag(fieldName, false)
+		}
+	}
+
+	for fieldName := range query.filtersNotString {
+		fieldType := getRedisSearchFieldType(schema, fieldName)
+		if fieldType == redisSearchIndexFieldTAG {
+			if !query.stringFiltersAreExact(fieldName, true) {
+				panic(fmt.Errorf("string filter on fields %s with type %s not allowed", fieldName, fieldType))
+			}
+			query.moveStringFiltersToTag(fieldName, true)
+		}
+	}
+}
+
+func getRedisSearchFieldType(schema *tableSchema, fieldName string) string {
+	_, has := schema.columnMapping[fieldName]
+	if !has {
+		panic(fmt.Errorf("unknown field %s", fieldName))
+	}
+	for _, field := range schema.redisSearchIndex.Fields {
+		if field.Name == fieldName {
+			return field.Type
+		}
+	}
+	panic(fmt.Errorf("missing `searchable` tag for field %s", fieldName))
 }

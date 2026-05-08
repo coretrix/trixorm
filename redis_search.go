@@ -189,38 +189,50 @@ func NewRedisSearchQuery() *RedisSearchQuery {
 }
 
 type RedisSearchQuery struct {
-	query                string
-	rawQueryAfterFilters string
-	filtersNumeric       map[string][][]string
-	filtersNotNumeric    map[string][]string
-	filtersGeo           map[string][]interface{}
-	filtersTags          map[string][][]string
-	filtersNotTags       map[string][][]string
-	filtersString        map[string][][]string
-	filtersNotString     map[string][][]string
-	filtersOrder         map[string]int
-	inKeys               []interface{}
-	inFields             []interface{}
-	toReturn             []interface{}
-	sortDesc             bool
-	sortField            string
-	verbatim             bool
-	noStopWords          bool
-	withScores           bool
-	slop                 int
-	inOrder              bool
-	lang                 string
-	explainScore         bool
-	highlight            []interface{}
-	highlightOpenTag     string
-	highlightCloseTag    string
-	summarize            []interface{}
-	summarizeSeparator   string
-	summarizeFrags       int
-	summarizeLen         int
-	withFakeDelete       bool
-	hasFakeDelete        bool
+	query                 string
+	rawQueryAfterFilters  string
+	filtersNumeric        map[string][][]string
+	filtersNotNumeric     map[string][]string
+	filtersGeo            map[string][]interface{}
+	filtersTags           map[string][][]string
+	filtersNotTags        map[string][][]string
+	filtersString         map[string][][]string
+	filtersNotString      map[string][][]string
+	filtersStringRaw      map[string][][]string
+	filtersNotStringRaw   map[string][][]string
+	filtersStringTypes    map[string][]redisSearchStringFilterType
+	filtersNotStringTypes map[string][]redisSearchStringFilterType
+	filtersOrder          map[string]int
+	inKeys                []interface{}
+	inFields              []interface{}
+	toReturn              []interface{}
+	sortDesc              bool
+	sortField             string
+	verbatim              bool
+	noStopWords           bool
+	withScores            bool
+	slop                  int
+	inOrder               bool
+	lang                  string
+	explainScore          bool
+	highlight             []interface{}
+	highlightOpenTag      string
+	highlightCloseTag     string
+	summarize             []interface{}
+	summarizeSeparator    string
+	summarizeFrags        int
+	summarizeLen          int
+	withFakeDelete        bool
+	hasFakeDelete         bool
 }
+
+type redisSearchStringFilterType uint8
+
+const (
+	redisSearchStringFilterTypeExact redisSearchStringFilterType = iota
+	redisSearchStringFilterTypeRaw
+	redisSearchStringFilterTypePrefix
+)
 
 type AggregateReduce struct {
 	function string
@@ -565,13 +577,32 @@ func (q *RedisSearchQuery) filterString(field string, exactPhrase, not, starts b
 	if len(value) == 0 {
 		return q
 	}
+	filterType := redisSearchStringFilterTypeExact
+	if starts {
+		filterType = redisSearchStringFilterTypePrefix
+	} else if !exactPhrase {
+		filterType = redisSearchStringFilterTypeRaw
+	}
+	valueRaw := append([]string(nil), value...)
 	if not {
 		if q.filtersNotString == nil {
 			q.filtersNotString = make(map[string][][]string)
 		}
+		if q.filtersNotStringRaw == nil {
+			q.filtersNotStringRaw = make(map[string][][]string)
+		}
+		if q.filtersNotStringTypes == nil {
+			q.filtersNotStringTypes = make(map[string][]redisSearchStringFilterType)
+		}
 	} else {
 		if q.filtersString == nil {
 			q.filtersString = make(map[string][][]string)
+		}
+		if q.filtersStringRaw == nil {
+			q.filtersStringRaw = make(map[string][][]string)
+		}
+		if q.filtersStringTypes == nil {
+			q.filtersStringTypes = make(map[string][]redisSearchStringFilterType)
 		}
 	}
 
@@ -606,8 +637,12 @@ func (q *RedisSearchQuery) filterString(field string, exactPhrase, not, starts b
 	}
 	if not {
 		q.filtersNotString[field] = append(q.filtersNotString[field], valueEscaped)
+		q.filtersNotStringRaw[field] = append(q.filtersNotStringRaw[field], valueRaw)
+		q.filtersNotStringTypes[field] = append(q.filtersNotStringTypes[field], filterType)
 	} else {
 		q.filtersString[field] = append(q.filtersString[field], valueEscaped)
+		q.filtersStringRaw[field] = append(q.filtersStringRaw[field], valueRaw)
+		q.filtersStringTypes[field] = append(q.filtersStringTypes[field], filterType)
 	}
 	q.setFieldOrder(field)
 	return q
@@ -715,16 +750,7 @@ func (q *RedisSearchQuery) FilterTag(field string, tag ...string) *RedisSearchQu
 	if q.filtersTags == nil {
 		q.filtersTags = make(map[string][][]string)
 	}
-	tagEscaped := make([]string, len(tag))
-	for i, v := range tag {
-		if v == "" {
-			v = "NULL"
-		} else {
-			v = EscapeRedisSearchString(v)
-		}
-		tagEscaped[i] = v
-	}
-	q.filtersTags[field] = append(q.filtersTags[field], tagEscaped)
+	q.filtersTags[field] = append(q.filtersTags[field], redisSearchEscapeTagValues(tag))
 	q.setFieldOrder(field)
 	return q
 }
@@ -733,6 +759,12 @@ func (q *RedisSearchQuery) FilterNotTag(field string, tag ...string) *RedisSearc
 	if q.filtersNotTags == nil {
 		q.filtersNotTags = make(map[string][][]string)
 	}
+	q.filtersNotTags[field] = append(q.filtersNotTags[field], redisSearchEscapeTagValues(tag))
+	q.setFieldOrder(field)
+	return q
+}
+
+func redisSearchEscapeTagValues(tag []string) []string {
 	tagEscaped := make([]string, len(tag))
 	for i, v := range tag {
 		if v == "" {
@@ -742,9 +774,85 @@ func (q *RedisSearchQuery) FilterNotTag(field string, tag ...string) *RedisSearc
 		}
 		tagEscaped[i] = v
 	}
-	q.filtersNotTags[field] = append(q.filtersNotTags[field], tagEscaped)
-	q.setFieldOrder(field)
-	return q
+	return tagEscaped
+}
+
+func (q *RedisSearchQuery) stringFiltersAreExact(field string, not bool) bool {
+	count := len(q.filtersString[field])
+	types := q.filtersStringTypes[field]
+	if not {
+		count = len(q.filtersNotString[field])
+		types = q.filtersNotStringTypes[field]
+	}
+	if len(types) == 0 {
+		return true
+	}
+	if len(types) != count {
+		return false
+	}
+	for _, filterType := range types {
+		if filterType != redisSearchStringFilterTypeExact {
+			return false
+		}
+	}
+	return true
+}
+
+func (q *RedisSearchQuery) moveStringFiltersToTag(field string, not bool) {
+	if not {
+		if q.filtersNotTags == nil {
+			q.filtersNotTags = make(map[string][][]string)
+		}
+		rawFilters := q.filtersNotStringRaw[field]
+		if len(rawFilters) == 0 {
+			rawFilters = redisSearchRawStringFilters(q.filtersNotString[field])
+		}
+		for _, rawFilter := range rawFilters {
+			q.filtersNotTags[field] = append(q.filtersNotTags[field], redisSearchEscapeTagValues(rawFilter))
+		}
+		delete(q.filtersNotString, field)
+		delete(q.filtersNotStringRaw, field)
+		delete(q.filtersNotStringTypes, field)
+		return
+	}
+	if q.filtersTags == nil {
+		q.filtersTags = make(map[string][][]string)
+	}
+	rawFilters := q.filtersStringRaw[field]
+	if len(rawFilters) == 0 {
+		rawFilters = redisSearchRawStringFilters(q.filtersString[field])
+	}
+	for _, rawFilter := range rawFilters {
+		q.filtersTags[field] = append(q.filtersTags[field], redisSearchEscapeTagValues(rawFilter))
+	}
+	delete(q.filtersString, field)
+	delete(q.filtersStringRaw, field)
+	delete(q.filtersStringTypes, field)
+}
+
+func redisSearchRawStringFilters(filters [][]string) [][]string {
+	rawFilters := make([][]string, len(filters))
+	for i, filter := range filters {
+		rawFilter := make([]string, len(filter))
+		for j, val := range filter {
+			rawFilter[j] = redisSearchRawStringFilter(val)
+		}
+		rawFilters[i] = rawFilter
+	}
+	return rawFilters
+}
+
+func redisSearchRawStringFilter(val string) string {
+	if val == "\"NULL\"" {
+		return ""
+	}
+	if len(val) >= 2 && strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"") {
+		val = val[1 : len(val)-1]
+	}
+	if len(val) == 1 {
+		return redisSearchStringReplacerBackOne.Replace(val)
+	}
+	return redisSearchStringReplacerBack.Replace(val)
 }
 
 func (q *RedisSearchQuery) FilterBool(field string, value bool) *RedisSearchQuery {

@@ -288,7 +288,7 @@ func testRedisSearch(t *testing.T, redisNamespace, version string) {
 	pusher.SetGeo("location", 52.2982648, 17.0103596)
 	pusher.SetInt("sort_test", 30)
 	pusher.SetString("title2", "hello 33 friend tom")
-	pusher.SetTag("status", "active", "temporary")
+	pusher.SetTag("status", "active", "temporary", "trial-2024-01-10")
 	pusher.PushDocument()
 	pusher.NewDocument("test2:34")
 	pusher.SetInt("number_signed", 10)
@@ -351,6 +351,12 @@ func testRedisSearch(t *testing.T, redisNamespace, version string) {
 	assert.Equal(t, "test2:35", rows[1].Key)
 	assert.Equal(t, "hello 34", rows[0].Value("title"))
 	assert.Equal(t, "hello 35", rows[1].Value("title"))
+
+	query = &RedisSearchQuery{}
+	query.FilterTag("status", "trial-2024-01-10")
+	total, rows = search.Search("test2", query, NewPager(1, 10))
+	assert.Equal(t, uint64(1), total)
+	assert.Equal(t, "test2:33", rows[0].Key)
 
 	query = &RedisSearchQuery{}
 	query.FilterInt("id", 34, 37)
