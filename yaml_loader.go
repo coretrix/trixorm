@@ -5,17 +5,32 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/go-redis/redis/v8"
 )
 
 func (r *Registry) InitByYaml(yaml map[string]interface{}) {
 	for key, data := range yaml {
 		dataAsMap := fixYamlMap(data, "orm")
+		redisValue, hasRedis := dataAsMap["redis"]
+		redisOptionsValue, hasRedisOptions := dataAsMap["redis_options"]
+		_, hasSentinel := dataAsMap["sentinel"]
+		if hasRedisOptions && !hasRedis {
+			if hasSentinel {
+				panic(fmt.Errorf("redis_options for %s are only supported with redis", key))
+			}
+			panic(fmt.Errorf("redis_options for %s require redis", key))
+		}
+		if hasRedis {
+			validateRedisURIWithOptions(r, redisValue, redisOptionsValue, hasRedisOptions, key)
+		}
 		for dataKey, value := range dataAsMap {
 			switch dataKey {
 			case "mysql":
 				validateOrmMysqlURI(r, value, key)
-			case "redis":
-				validateRedisURI(r, value, key)
+			case "redis", "redis_options":
+				// Redis is initialized above after the complete pool configuration is available.
 			case "sentinel":
 				validateSentinel(r, value, key)
 			case "streams":
@@ -62,6 +77,16 @@ func validateStreams(registry *Registry, value interface{}, key string) {
 }
 
 func validateRedisURI(registry *Registry, value interface{}, key string) {
+	validateRedisURIWithOptions(registry, value, nil, false, key)
+}
+
+func validateRedisURIWithOptions(
+	registry *Registry,
+	value interface{},
+	optionsValue interface{},
+	hasOptions bool,
+	key string,
+) {
 	asString, ok := value.(string)
 	if !ok {
 		panic(fmt.Errorf("redis uri '%v' is not valid", value))
@@ -97,17 +122,86 @@ func validateRedisURI(registry *Registry, value interface{}, key string) {
 	if err != nil {
 		panic(fmt.Errorf("redis uri '%v' is not valid", value))
 	}
+	redisOptions := redis.Options{
+		Addr: uri,
+		DB:   int(db),
+	}
 	if len(parts) == 2 && parts[1] != "" {
 		values, err := url.ParseQuery(parts[1])
 		if err != nil {
 			panic(fmt.Errorf("redis uri '%v' is not valid", value))
 		}
 		if values.Has("user") && values.Has("password") {
-			registry.RegisterRedisWithCredentials(uri, namespace, values.Get("user"), values.Get("password"), int(db), key)
-			return
+			redisOptions.Username = values.Get("user")
+			redisOptions.Password = values.Get("password")
 		}
 	}
-	registry.RegisterRedis(uri, namespace, int(db), key)
+	if hasOptions {
+		applyRedisOptions(&redisOptions, optionsValue, key)
+	}
+	registry.RegisterRedisWithOptions(namespace, redisOptions, key)
+}
+
+func applyRedisOptions(options *redis.Options, value interface{}, key string) {
+	values := fixYamlMap(value, key+".redis_options")
+	for option, rawValue := range values {
+		switch option {
+		case "pool_size":
+			options.PoolSize = validateRedisPositiveInt(rawValue, key, option)
+		case "min_idle_conns":
+			options.MinIdleConns = validateRedisNonNegativeInt(rawValue, key, option)
+		case "pool_timeout":
+			options.PoolTimeout = validateRedisDuration(rawValue, key, option)
+		case "dial_timeout":
+			options.DialTimeout = validateRedisDuration(rawValue, key, option)
+		case "read_timeout":
+			options.ReadTimeout = validateRedisDuration(rawValue, key, option)
+		case "write_timeout":
+			options.WriteTimeout = validateRedisDuration(rawValue, key, option)
+		case "max_retries":
+			options.MaxRetries = validateRedisNonNegativeInt(rawValue, key, option)
+		case "min_retry_backoff":
+			options.MinRetryBackoff = validateRedisDuration(rawValue, key, option)
+		case "max_retry_backoff":
+			options.MaxRetryBackoff = validateRedisDuration(rawValue, key, option)
+		case "pool_fifo":
+			asBool, ok := rawValue.(bool)
+			if !ok {
+				panic(fmt.Errorf("redis option %s.%s '%v' is not valid", key, option, rawValue))
+			}
+			options.PoolFIFO = asBool
+		default:
+			panic(fmt.Errorf("redis option %s.%s is not supported", key, option))
+		}
+	}
+}
+
+func validateRedisPositiveInt(value interface{}, key, option string) int {
+	asInt := validateRedisNonNegativeInt(value, key, option)
+	if asInt == 0 {
+		panic(fmt.Errorf("redis option %s.%s must be greater than zero", key, option))
+	}
+	return asInt
+}
+
+func validateRedisNonNegativeInt(value interface{}, key, option string) int {
+	asInt, ok := value.(int)
+	if !ok || asInt < 0 {
+		panic(fmt.Errorf("redis option %s.%s '%v' is not valid", key, option, value))
+	}
+	return asInt
+}
+
+func validateRedisDuration(value interface{}, key, option string) time.Duration {
+	asString, ok := value.(string)
+	if !ok {
+		panic(fmt.Errorf("redis option %s.%s '%v' is not valid", key, option, value))
+	}
+	duration, err := time.ParseDuration(asString)
+	if err != nil || duration <= 0 {
+		panic(fmt.Errorf("redis option %s.%s '%v' is not valid", key, option, value))
+	}
+	return duration
 }
 
 func validateSentinel(registry *Registry, value interface{}, key string) {

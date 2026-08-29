@@ -75,6 +75,10 @@ func (r *RedisCache) GetPoolConfig() RedisPoolConfig {
 	return r.config
 }
 
+func (r *RedisCache) PoolStats() *redis.PoolStats {
+	return r.client.PoolStats()
+}
+
 func (r *RedisCache) Get(key string) (value string, has bool) {
 	start := getNow(r.engine.hasRedisLogger)
 	key = r.addNamespacePrefix(key)

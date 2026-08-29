@@ -782,6 +782,27 @@ func TestExtraBackportInventoryRedisCredentialOptions(t *testing.T) {
 		assert.Equal(t, 15, options.DB)
 	})
 
+	t.Run("direct redis options registration carries pool settings", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.RegisterRedisWithOptions("tenant", redis.Options{
+			Addr:         "localhost:6382",
+			DB:           15,
+			PoolSize:     64,
+			MinIdleConns: 8,
+			PoolTimeout:  10 * time.Second,
+		}, "streams")
+
+		config := registry.redisPools["streams"]
+		options := config.getClient().Options()
+		assert.Equal(t, "tenant", config.GetNamespace())
+		assert.Equal(t, "localhost:6382", config.GetAddress())
+		assert.Equal(t, 15, config.GetDatabase())
+		assert.Equal(t, 64, options.PoolSize)
+		assert.Equal(t, 8, options.MinIdleConns)
+		assert.Equal(t, 10*time.Second, options.PoolTimeout)
+		assert.Equal(t, 2*time.Minute, options.MaxConnAge)
+	})
+
 	t.Run("sentinel credentials populate failover client options when username is set", func(t *testing.T) {
 		registry := NewRegistry()
 		registry.RegisterRedisSentinelWithCredentials("master", "tenant", "user", "pass", 4, []string{"s1:26379", "s2:26379"}, "sentinel")

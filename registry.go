@@ -270,18 +270,23 @@ func (r *Registry) RegisterRedis(address, namespace string, db int, code ...stri
 }
 
 func (r *Registry) RegisterRedisWithCredentials(address, namespace, user, password string, db int, code ...string) {
-	options := &redis.Options{
-		Addr:       address,
-		DB:         db,
-		MaxConnAge: time.Minute * 2,
-		Username:   user,
-		Password:   password,
+	r.RegisterRedisWithOptions(namespace, redis.Options{
+		Addr:     address,
+		DB:       db,
+		Username: user,
+		Password: password,
+	}, code...)
+}
+
+func (r *Registry) RegisterRedisWithOptions(namespace string, options redis.Options, code ...string) {
+	if options.MaxConnAge == 0 {
+		options.MaxConnAge = time.Minute * 2
 	}
-	if strings.HasSuffix(address, ".sock") {
+	if options.Network == "" && strings.HasSuffix(options.Addr, ".sock") {
 		options.Network = "unix"
 	}
-	client := redis.NewClient(options)
-	r.registerRedis(client, code, address, namespace, db)
+	client := redis.NewClient(&options)
+	r.registerRedis(client, code, options.Addr, namespace, options.DB)
 }
 
 func (r *Registry) RegisterRedisSentinel(masterName, namespace string, db int, sentinels []string, code ...string) {

@@ -3,6 +3,7 @@ package trixorm
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,6 +95,45 @@ func TestExtraRegistryYamlScenarios(t *testing.T) {
 		assert.True(t, pool.HasNamespace())
 	})
 
+	t.Run("redis client options are parsed independently from the uri", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.InitByYaml(map[string]interface{}{
+			"streams": map[string]interface{}{
+				"redis": "localhost:6382:14:tenant?user=u&password=p",
+				"redis_options": map[string]interface{}{
+					"pool_size":         64,
+					"min_idle_conns":    8,
+					"pool_timeout":      "10s",
+					"dial_timeout":      "5s",
+					"read_timeout":      "3s",
+					"write_timeout":     "4s",
+					"max_retries":       5,
+					"min_retry_backoff": "20ms",
+					"max_retry_backoff": "2s",
+					"pool_fifo":         true,
+				},
+			},
+		})
+
+		pool := registry.redisPools["streams"]
+		options := pool.getClient().Options()
+		assert.Equal(t, "localhost:6382", pool.GetAddress())
+		assert.Equal(t, 14, pool.GetDatabase())
+		assert.Equal(t, "tenant", pool.GetNamespace())
+		assert.Equal(t, "u", options.Username)
+		assert.Equal(t, "p", options.Password)
+		assert.Equal(t, 64, options.PoolSize)
+		assert.Equal(t, 8, options.MinIdleConns)
+		assert.Equal(t, 10*time.Second, options.PoolTimeout)
+		assert.Equal(t, 5*time.Second, options.DialTimeout)
+		assert.Equal(t, 3*time.Second, options.ReadTimeout)
+		assert.Equal(t, 4*time.Second, options.WriteTimeout)
+		assert.Equal(t, 5, options.MaxRetries)
+		assert.Equal(t, 20*time.Millisecond, options.MinRetryBackoff)
+		assert.Equal(t, 2*time.Second, options.MaxRetryBackoff)
+		assert.True(t, options.PoolFIFO)
+	})
+
 	t.Run("redis unix socket uri keeps socket address", func(t *testing.T) {
 		registry := NewRegistry()
 		registry.InitByYaml(map[string]interface{}{
@@ -175,6 +215,38 @@ func TestExtraRegistryYamlScenarios(t *testing.T) {
 	t.Run("invalid redis db panics", func(t *testing.T) {
 		assert.PanicsWithError(t, "redis uri 'localhost:not-a-db' is not valid", func() {
 			NewRegistry().InitByYaml(map[string]interface{}{"default": map[string]interface{}{"redis": "localhost:not-a-db"}})
+		})
+	})
+
+	t.Run("redis options require a redis uri", func(t *testing.T) {
+		assert.PanicsWithError(t, "redis_options for streams require redis", func() {
+			NewRegistry().InitByYaml(map[string]interface{}{
+				"streams": map[string]interface{}{
+					"redis_options": map[string]interface{}{"pool_size": 64},
+				},
+			})
+		})
+	})
+
+	t.Run("redis options do not silently accept unsupported values", func(t *testing.T) {
+		assert.PanicsWithError(t, "redis option streams.unknown is not supported", func() {
+			NewRegistry().InitByYaml(map[string]interface{}{
+				"streams": map[string]interface{}{
+					"redis":         "localhost:6379:1",
+					"redis_options": map[string]interface{}{"unknown": 1},
+				},
+			})
+		})
+	})
+
+	t.Run("redis options validate pool size", func(t *testing.T) {
+		assert.PanicsWithError(t, "redis option streams.pool_size must be greater than zero", func() {
+			NewRegistry().InitByYaml(map[string]interface{}{
+				"streams": map[string]interface{}{
+					"redis":         "localhost:6379:1",
+					"redis_options": map[string]interface{}{"pool_size": 0},
+				},
+			})
 		})
 	})
 
