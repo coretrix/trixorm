@@ -99,6 +99,26 @@ func (r *RedisCache) Get(key string) (value string, has bool) {
 	return val, true
 }
 
+func (r *RedisCache) GetDel(key string) (value string, has bool) {
+	start := getNow(r.engine.hasRedisLogger)
+	key = r.addNamespacePrefix(key)
+	val, err := r.client.GetDel(context.Background(), key).Result()
+	if err != nil {
+		if err == redis.Nil {
+			err = nil
+		}
+		if r.engine.hasRedisLogger {
+			r.fillLogFields("GETDEL", "GETDEL "+key, start, true, err)
+		}
+		checkError(err)
+		return "", false
+	}
+	if r.engine.hasRedisLogger {
+		r.fillLogFields("GETDEL", "GETDEL "+key, start, false, err)
+	}
+	return val, true
+}
+
 func (r *RedisCache) Eval(script string, keys []string, args ...interface{}) interface{} {
 	start := getNow(r.engine.hasRedisLogger)
 	res, err := r.client.Eval(context.Background(), script, keys, args...).Result()
