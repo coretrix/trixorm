@@ -1184,12 +1184,19 @@ func (r *RedisCache) Subscribe(channels ...string) *redis.PubSub {
 }
 
 func (r *RedisCache) Publish(channel string, message interface{}) int64 {
+	val, err := r.PublishWithContext(context.Background(), channel, message)
+	checkError(err)
+
+	return val
+}
+
+func (r *RedisCache) PublishWithContext(ctx context.Context, channel string, message interface{}) (int64, error) {
 	channel = r.addNamespacePrefix(channel)
 	start := getNow(r.engine.hasRedisLogger)
-	val, err := r.client.Publish(context.Background(), channel, message).Result()
+	val, err := r.client.Publish(ctx, channel, message).Result()
 	if r.engine.hasRedisLogger {
 		r.fillLogFields("PUBLISH", "PUBLISH "+channel+" "+fmt.Sprintf("%v", message), start, false, err)
 	}
-	checkError(err)
-	return val
+
+	return val, err
 }
