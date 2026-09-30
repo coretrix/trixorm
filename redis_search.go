@@ -1057,7 +1057,7 @@ func (r *RedisSearch) Aggregate(index string, query *RedisSearchAggregate, pager
 	res, err := cmd.Result()
 	checkError(err)
 	totalRows = uint64(res[0].(int64))
-	result = make([]map[string]string, totalRows)
+	result = make([]map[string]string, len(res)-1)
 	for i, row := range res[1:] {
 		data := make(map[string]string)
 		rowSlice := row.([]interface{})
