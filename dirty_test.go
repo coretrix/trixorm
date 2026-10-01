@@ -45,6 +45,7 @@ func TestDirtyConsumer(t *testing.T) {
 	consumer.Consume(context.Background(), 10, func(events []Event) {
 		valid = true
 		assert.Len(t, events, 2)
+		assert.Nil(t, EventDirtyEntityReferences(events[0]))
 		dirty1 := EventDirtyEntity(events[0])
 		dirty2 := EventDirtyEntity(events[1])
 		assert.Equal(t, uint64(1), dirty1.ID())

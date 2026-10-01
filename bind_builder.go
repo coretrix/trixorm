@@ -39,7 +39,7 @@ func newBindBuilder(id uint64, orm *ORM) *bindBuilder {
 	} else {
 		b.sqlBind = make(map[string]string)
 	}
-	if orm.delete || orm.tableSchema.hasLog || len(orm.tableSchema.cachedIndexesAll) > 0 {
+	if orm.delete || orm.tableSchema.hasLog || len(orm.tableSchema.cachedIndexesAll) > 0 || orm.tableSchema.tags["ORM"][dirtyReferencesTag] == "true" {
 		b.hasCurrent = true
 		b.current = Bind{}
 	}

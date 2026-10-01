@@ -404,7 +404,7 @@ func (f *flusher) executeDeletes(lazy bool) {
 					_ = db.Exec(deleteSQL)
 					queryExecuted = true
 				}
-				f.addDirtyQueues(bindBuilder.current, schema, id, "d", lazy)
+				f.addDirtyQueues(bindBuilder.current, nil, schema, id, "d", lazy)
 				f.addToLogQueue(schema, id, bindBuilder.current, nil, entity.getORM().logMeta, lazy)
 			} else {
 				var logEvents []*LogQueueValue
@@ -413,7 +413,7 @@ func (f *flusher) executeDeletes(lazy bool) {
 				if logEvent != nil {
 					logEvents = append(logEvents, logEvent)
 				}
-				dirtyEvent := f.addDirtyQueues(bindBuilder.current, schema, id, "d", lazy)
+				dirtyEvent := f.addDirtyQueues(bindBuilder.current, nil, schema, id, "d", lazy)
 				if dirtyEvent != nil {
 					dirtyEvents = append(dirtyEvents, dirtyEvent)
 				}
@@ -783,7 +783,7 @@ func (f *flusher) updateCacheForInserted(entity Entity, lazy bool, id uint64, bi
 		}
 	}
 	f.fillRedisSearchFromBind(schema, bind, id, true)
-	return f.addToLogQueue(schema, id, nil, bind, entity.getORM().logMeta, lazy), f.addDirtyQueues(bind, schema, id, "i", lazy)
+	return f.addToLogQueue(schema, id, nil, bind, entity.getORM().logMeta, lazy), f.addDirtyQueues(bind, nil, schema, id, "i", lazy)
 }
 
 func (f *flusher) getRedisFlusher() *redisFlusher {
@@ -827,14 +827,14 @@ func (f *flusher) updateCacheAfterUpdate(entity Entity, bind, current Bind, sche
 		}
 	}
 	f.fillRedisSearchFromBind(schema, bind, entity.GetID(), false)
-	dirtyValue := f.addDirtyQueues(bind, schema, currentID, "u", lazy)
+	dirtyValue := f.addDirtyQueues(bind, current, schema, currentID, "u", lazy)
 	if schema.hasLog {
 		return f.addToLogQueue(schema, currentID, current, bind, entity.getORM().logMeta, lazy), dirtyValue
 	}
 	return nil, dirtyValue
 }
 
-func (f *flusher) addDirtyQueues(bind Bind, schema *tableSchema, id uint64, action string, lazy bool) *dirtyQueueValue {
+func (f *flusher) addDirtyQueues(bind, current Bind, schema *tableSchema, id uint64, action string, lazy bool) *dirtyQueueValue {
 	var key *dirtyEvent
 	var allStreams []string
 	for stream, columns := range schema.dirtyFields {
@@ -848,6 +848,9 @@ func (f *flusher) addDirtyQueues(bind Bind, schema *tableSchema, id uint64, acti
 			}
 			if key == nil {
 				key = &dirtyEvent{A: action, E: schema.t.String(), I: id}
+				if schema.tags["ORM"][dirtyReferencesTag] == "true" {
+					key.References = dirtyReferenceIDs(schema, bind, current, action)
+				}
 			}
 			if !lazy {
 				f.getRedisFlusher().Publish(stream, key)
@@ -1003,4 +1006,32 @@ func (f *flusher) fillLazyQuery(dbCode string, sql string, insert bool, id uint6
 	if len(dirtyData) > 0 {
 		lazyMap["d"] = dirtyData
 	}
+}
+
+func dirtyReferenceIDs(schema *tableSchema, bind, current Bind, action string) *DirtyEntityReferences {
+	references := &DirtyEntityReferences{}
+	if action != "i" {
+		references.Before = make(map[string]uint64, len(schema.refOne))
+	}
+	if action != "d" {
+		references.After = make(map[string]uint64, len(schema.refOne))
+	}
+	for _, column := range schema.refOne {
+		previousID, _ := current[column].(uint64)
+		value, changed := bind[column]
+		currentID := previousID
+		if changed {
+			currentID, _ = value.(uint64)
+		}
+		if action == "d" {
+			previousID, _ = bind[column].(uint64)
+		}
+		if references.Before != nil {
+			references.Before[column] = previousID
+		}
+		if references.After != nil {
+			references.After[column] = currentID
+		}
+	}
+	return references
 }
