@@ -345,6 +345,20 @@ func (a *RedisSearchAggregate) Sort(fields ...RedisSearchAggregateSort) *RedisSe
 	return a
 }
 
+// SortWithMax keeps only the first maxResults rows in the requested order.
+// For offset pagination, maxResults must cover offset plus page size.
+func (a *RedisSearchAggregate) SortWithMax(maxResults int, fields ...RedisSearchAggregateSort) *RedisSearchAggregate {
+	if maxResults <= 0 {
+		panic(fmt.Errorf("aggregate sort maximum must be positive"))
+	}
+	if len(fields) == 0 {
+		panic(fmt.Errorf("aggregate sort requires at least one field"))
+	}
+	a.Sort(fields...)
+	a.args = append(a.args, "MAX", strconv.Itoa(maxResults))
+	return a
+}
+
 func (a *RedisSearchAggregate) Load(fields *LoadFields) *RedisSearchAggregate {
 	a.args = append(a.args, "LOAD", strconv.Itoa(len(fields.args)))
 	for _, field := range fields.args {
