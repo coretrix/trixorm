@@ -1491,7 +1491,8 @@ func isRedisSearchMissingIndexError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "unknown index") || strings.Contains(message, "no such index")
+	return message == "search_index_not_found" || strings.HasPrefix(message, "search_index_not_found ") ||
+		strings.Contains(message, "unknown index") || strings.Contains(message, "no such index")
 }
 
 func redisSearchInfoValueString(value interface{}) string {

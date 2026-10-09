@@ -50,10 +50,28 @@ func TestParseRedisSearchInfoFieldsAttributes(t *testing.T) {
 }
 
 func TestRedisSearchMissingIndexErrors(t *testing.T) {
-	assert.True(t, isRedisSearchMissingIndexError(errors.New("Unknown Index name")))
-	assert.True(t, isRedisSearchMissingIndexError(errors.New("test: no such index")))
-	assert.False(t, isRedisSearchMissingIndexError(errors.New("connection refused")))
-	assert.False(t, isRedisSearchMissingIndexError(nil))
+	testCases := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{name: "legacy unknown index", err: errors.New("Unknown Index name"), expected: true},
+		{name: "legacy no such index", err: errors.New("test: no such index"), expected: true},
+		{name: "redis 8.10 missing index", err: errors.New("SEARCH_INDEX_NOT_FOUND Index not found: test"), expected: true},
+		{name: "redis 8.10 namespaced index", err: errors.New("SEARCH_INDEX_NOT_FOUND Index not found: tenant:test"), expected: true},
+		{name: "redis 8.10 error code only", err: errors.New("SEARCH_INDEX_NOT_FOUND"), expected: true},
+		{name: "connection error", err: errors.New("connection refused")},
+		{name: "different search error", err: errors.New("SEARCH_FIELD_NOT_FOUND Field not found: title")},
+		{name: "similar error code", err: errors.New("SEARCH_INDEX_NOT_FOUND_OTHER unexpected error")},
+		{name: "error code inside message", err: errors.New("unexpected response: SEARCH_INDEX_NOT_FOUND")},
+		{name: "no error"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.expected, isRedisSearchMissingIndexError(testCase.err))
+		})
+	}
 }
 
 func TestRedisSearchIndexer(t *testing.T) {
@@ -155,7 +173,6 @@ func testRedisSearch(t *testing.T, redisNamespace, version string) {
 	testIndex.MaxTextFields = true
 	testIndex.NoOffsets = true
 	testIndex.NoNHL = true // TODO why not visible in info
-	testIndex.NoFields = true
 	testIndex.NoFreqs = true
 	testIndex.DefaultLanguage = "Dutch"
 	testIndex.AddTextField("title", 0.4, true, false, false)
@@ -222,7 +239,7 @@ func testRedisSearch(t *testing.T, redisNamespace, version string) {
 	assert.Equal(t, []string{"and", "in"}, info.StopWords)
 	assert.True(t, info.Options.MaxTextFields)
 	assert.True(t, info.Options.NoOffsets)
-	assert.True(t, info.Options.NoFields)
+	assert.False(t, info.Options.NoFields)
 	assert.True(t, info.Options.NoFreqs)
 	assert.Len(t, info.Fields, 5)
 	assert.Equal(t, "title", info.Fields[0].Name)
@@ -249,6 +266,17 @@ func testRedisSearch(t *testing.T, redisNamespace, version string) {
 	assert.Equal(t, ".", info.Fields[4].TagSeparator)
 
 	assert.Nil(t, search.Info("invalid"))
+	assert.False(t, search.dropIndex("invalid", false))
+	assert.False(t, search.dropIndex("invalid", true))
+
+	// Redis 8.10 rejects NOFIELDS with MAXTEXTFIELDS, so test NOFIELDS independently.
+	noFieldsIndex := NewRedisSearchIndex("no_fields", "search", []string{"no_fields:"})
+	noFieldsIndex.NoFields = true
+	noFieldsIndex.AddTextField("title", 1, false, false, false)
+	search.createIndex(noFieldsIndex)
+	assert.True(t, search.Info("no_fields").Options.NoFields)
+	assert.False(t, search.Info("no_fields").Options.MaxTextFields)
+	assert.True(t, search.dropIndex("no_fields", false))
 
 	testIndex2.Indexer = func(engine *Engine, lastID uint64, pusher RedisSearchIndexPusher) (newID uint64, hasMore bool) {
 		for i := lastID + 1; i <= lastID+100; i++ {

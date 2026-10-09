@@ -379,6 +379,13 @@ type flushEntityBenchmark struct {
 	Age  int
 }
 
+type flusherTrackLimitEntity struct {
+	ORM
+	ID   uint
+	Name string
+	Age  int
+}
+
 func TestFlushLocalRedis(t *testing.T) {
 	testFlush(t, true, true)
 }
@@ -393,6 +400,32 @@ func TestFlushNoCache(t *testing.T) {
 
 func TestFlushRedis(t *testing.T) {
 	testFlush(t, false, true)
+}
+
+func TestFlusherTrackLimitCounterResetsAfterSuccessfulFlush(t *testing.T) {
+	var entity *flusherTrackLimitEntity
+	engine, def := prepareTables(t, &Registry{}, 5, "flusher_track_limit_reset", "", entity)
+	defer def()
+
+	testFlusher := engine.NewFlusher()
+	seed := &flusherTrackLimitEntity{Name: "track_limit_seed"}
+	testFlusher.Track(seed)
+	testFlusher.Flush()
+
+	seed.Age = 9
+	testFlusher.Flush()
+
+	loaded := &flusherTrackLimitEntity{}
+	assert.True(t, engine.LoadByID(uint64(seed.ID), loaded))
+	assert.Equal(t, 9, loaded.Age)
+
+	rawFlusher := testFlusher.(*flusher)
+	rawFlusher.trackedEntitiesCounter = 10000
+	testFlusher.Flush()
+
+	assert.NotPanics(t, func() {
+		testFlusher.Track(&flusherTrackLimitEntity{Name: "track_limit_after_flush"})
+	})
 }
 
 func testFlush(t *testing.T, local bool, redis bool) {

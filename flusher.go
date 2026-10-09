@@ -138,7 +138,7 @@ func (f *flusher) Clear() {
 }
 
 func (f *flusher) flushTrackedEntities(lazy bool, transaction bool) {
-	if f.trackedEntitiesCounter == 0 {
+	if len(f.trackedEntities) == 0 {
 		return
 	}
 	var dbPools map[string]*DB
@@ -189,6 +189,7 @@ func (f *flusher) flushTrackedEntities(lazy bool, transaction bool) {
 	f.deleteBinds = nil
 	f.localCacheDeletes = nil
 	f.localCacheSets = nil
+	f.trackedEntitiesCounter = 0
 }
 
 func (f *flusher) flushWithCheck(transaction bool) error {
